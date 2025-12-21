@@ -31,7 +31,7 @@ struct OnboardingContainer: View {
     @State private var micPermission = PermissionsManager.shared.microphonePermission.isGranted
     @State private var accessibilityPermission = PermissionsManager.shared.accessibilityPermission.isGranted
     
-    private let hermesBlue = Color(red: 0.2, green: 0.8, blue: 0.8)
+    private let hermesBlue = invokeTealColor
     private let sidebarBg = Color.black.opacity(0.03)
     
     var body: some View {

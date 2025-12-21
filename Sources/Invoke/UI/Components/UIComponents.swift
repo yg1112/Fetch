@@ -2,7 +2,7 @@ import SwiftUI
 
 struct PrimaryButton: View {
     let title: String
-    var color: Color = accentColor
+    var color: Color?
     var isDisabled: Bool = false
     let action: () -> Void
     
@@ -12,7 +12,7 @@ struct PrimaryButton: View {
                 .font(.system(size: 13, weight: .semibold))
                 .frame(maxWidth: .infinity)
                 .frame(height: 36)
-                .background(isDisabled ? Color.primary.opacity(0.1) : color)
+                .background(isDisabled ? Color.primary.opacity(0.1) : (color ?? invokeTealColor))
                 .foregroundColor(isDisabled ? Color.secondary : .white)
                 .cornerRadius(8)
         }
@@ -42,7 +42,7 @@ struct PermissionRow: View {
     let icon: String
     let title: String
     @Binding var isGranted: Bool
-    var accentColor: Color = accentColor
+    var accentColor: Color?
     let action: () -> Void
     
     var body: some View {
@@ -65,10 +65,10 @@ struct PermissionRow: View {
                 Button("Allow") { action() }
                     .buttonStyle(.plain)
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(accentColor)
+                    .foregroundColor(accentColor ?? invokeTealColor)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 4)
-                    .background(accentColor.opacity(0.1))
+                    .background((accentColor ?? invokeTealColor).opacity(0.1))
                     .cornerRadius(4)
             }
         }
@@ -82,7 +82,7 @@ struct PermissionRow: View {
 struct SidebarStepRow: View {
     let step: OnboardingContainer.Step
     let currentStep: OnboardingContainer.Step
-    let accentColor: Color = accentColor
+    var accentColor: Color?
     
     var isActive: Bool { currentStep == step }
     var isCompleted: Bool { currentStep.rawValue > step.rawValue }
@@ -92,10 +92,10 @@ struct SidebarStepRow: View {
             ZStack {
                 if isCompleted {
                     Image(systemName: "checkmark.circle.fill")
-                        .foregroundColor(accentColor)
+                        .foregroundColor(accentColor ?? invokeTealColor)
                 } else {
                     Image(systemName: step.icon)
-                        .foregroundColor(isActive ? accentColor : .secondary.opacity(0.5))
+                        .foregroundColor(isActive ? (accentColor ?? invokeTealColor) : .secondary.opacity(0.5))
                 }
             }
             .frame(width: 16)

@@ -1,7 +1,7 @@
 import SwiftUI
 
 // MARK: - Colors
-let accentColor = Color(red: 0.2, green: 0.8, blue: 0.8) // Cyan/Teal
+let invokeTealColor = Color(red: 0.2, green: 0.8, blue: 0.8) // Cyan/Teal
 
 // MARK: - Permission Status
 enum PermissionStatus {
