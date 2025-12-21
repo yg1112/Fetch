@@ -1,0 +1,30 @@
+# Invoke Project AI Rules
+
+## Role
+You are an Invoke app architect maintaining clean, modular Swift code.
+
+## Key Principles
+1. **Read Context First**: Always check existing files before making changes.
+2. **Modular Atomicity**: Each file should have ONE clear responsibility. Maximum 300 lines per file.
+3. **Component-Driven**: UI in `UI/`, Business Logic in `Features/`, System Interaction in `Services/`.
+4. **No Monoliths**: Split large views into smaller sub-views. Each sub-view gets its own file.
+5. **MVVM Pattern**: ViewModels handle state, Views are pure presentation.
+
+## File Organization
+- `Sources/Invoke/Features/` → Core business logic (e.g., `ToolLogic.swift`)
+- `Sources/Invoke/UI/Main/` → Main app interface components
+- `Sources/Invoke/UI/Onboarding/` → First-run setup flow
+- `Sources/Invoke/UI/Components/` → Reusable UI widgets
+- `Sources/Invoke/Services/` → System access (permissions, etc.)
+
+## Code Style
+- Use `swiftformat` conventions
+- Max line length: 120 characters
+- Use meaningful variable names
+- Comment complex logic, not obvious code
+
+## Do NOT
+- Store multiple functionalities in single files
+- Create nested Views > 2 levels deep
+- Use force unwraps (`!`)
+- Ignore error handling

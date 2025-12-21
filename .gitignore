@@ -1,0 +1,29 @@
+# Xcode
+.DS_Store
+xcuserdata/
+*.xcworkspace
+DerivedData/
+build/
+*.pbxuser
+*.perspective
+*.perspectivev3
+*.xcworkspace/*
+!*.xcworkspace/contents.xcworkspacedata
+
+# Swift
+.build/
+*.xcodeproj/xcshareddata/xcschemes/
+*.swiftpm
+
+# Environment
+.env
+*.pem
+
+# IDE
+.vscode/
+.idea/
+
+# macOS
+.DS_Store
+*.app
+dist/
