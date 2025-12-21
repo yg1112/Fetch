@@ -1,29 +1,14 @@
 import SwiftUI
 
 struct AppUI: View {
+    // 这里的回调暂时保留以兼容接口，但实际逻辑移交给 ContentView
     let onSettings: () -> Void
     let onQuit: () -> Void
     
     var body: some View {
-        VStack(spacing: 0) {
-            HeaderView()
-            
-            Divider()
-                .opacity(0.1)
-            
-            ContentView()
-                .frame(maxHeight: .infinity, alignment: .center)
-            
-            Divider()
-                .opacity(0.1)
-            
-            FooterView(onSettings: onSettings, onQuit: onQuit)
-        }
-        .background(.ultraThinMaterial)
-        .cornerRadius(12)
+        // 彻底移除原本的 HeaderView/FooterView 包裹
+        // 让 ContentView 接管所有像素的渲染
+        ContentView()
+            .edgesIgnoringSafeArea(.all)
     }
-}
-
-#Preview {
-    AppUI(onSettings: {}, onQuit: {})
 }
