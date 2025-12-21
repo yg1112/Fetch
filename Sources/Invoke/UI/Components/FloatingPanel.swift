@@ -15,4 +15,9 @@ class FloatingPanel: NSPanel {
         }
         super.sendEvent(event)
     }
+
+    // Allow dragging the borderless panel by clicking anywhere in the panel.
+    override func mouseDown(with event: NSEvent) {
+        self.performDrag(with: event)
+    }
 }
