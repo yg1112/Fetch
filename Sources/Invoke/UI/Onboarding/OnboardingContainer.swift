@@ -1,214 +1,361 @@
 import SwiftUI
-import AVFoundation
-import ApplicationServices
 
 struct OnboardingContainer: View {
-    var onFinish: () -> Void
-    
-    enum Step: Int, CaseIterable {
-        case welcome = 0
-        case permissions
-        case ready
-        
-        var title: String {
-            switch self {
-            case .welcome: return "Welcome"
-            case .permissions: return "Permissions"
-            case .ready: return "Ready"
-            }
-        }
-        
-        var icon: String {
-            switch self {
-            case .welcome: return "hand.rays.fill"
-            case .permissions: return "lock.shield.fill"
-            case .ready: return "checkmark.seal.fill"
-            }
-        }
-    }
-    
-    @State private var currentStep: Step = .welcome
-    @State private var micPermission = PermissionsManager.shared.microphonePermission.isGranted
-    @State private var accessibilityPermission = PermissionsManager.shared.accessibilityPermission.isGranted
-    
-    private let hermesBlue = invokeTealColor
-    private let sidebarBg = Color.black.opacity(0.03)
+    @AppStorage("hasCompletedOnboarding") var hasCompletedOnboarding: Bool = false
+    @StateObject private var permissions = PermissionsManager.shared
+    @State private var currentStep = 0
+    @State private var selectedMode: GeminiLinkLogic.GitMode = .localOnly
     
     var body: some View {
-        ZStack {
-            VisualEffectView(material: .hudWindow, blendingMode: .behindWindow)
-                .edgesIgnoringSafeArea(.all)
+        VStack {
+            if currentStep == 0 {
+                welcomeView
+            } else if currentStep == 1 {
+                animationDemoView
+            } else if currentStep == 2 {
+                modeSelectionView
+            } else if currentStep == 3 {
+                permissionsView
+            } else if currentStep == 4 {
+                geminiSetupView
+            }
+        }
+        .frame(width: 600, height: 520)
+        .background(VisualEffectView(material: .popover, blendingMode: .behindWindow))
+        .cornerRadius(12)
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color.white.opacity(0.1), lineWidth: 1)
+        )
+    }
+    
+    // MARK: - Step 0: Welcome
+    var welcomeView: some View {
+        VStack(spacing: 30) {
+            Spacer()
             
-            HStack(spacing: 0) {
-                // Left Sidebar
-                VStack(alignment: .leading, spacing: 0) {
-                    VStack(alignment: .leading, spacing: 6) {
-                        ForEach(Step.allCases, id: \.self) { step in
-                            SidebarStepRow(step: step, currentStep: currentStep)
-                        }
-                    }
-                    .padding(.horizontal, 12)
-                    
-                    Spacer()
-                    
-                    Text("Invoke v1.0")
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundColor(.secondary.opacity(0.5))
-                        .padding(20)
-                }
-                .frame(width: 220)
-                .background(sidebarBg)
-                .border(width: 0.5, edges: [.trailing], color: Color.black.opacity(0.05))
+            Image(systemName: "sparkles")
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(width: 80, height: 80)
+                .foregroundStyle(
+                    LinearGradient(
+                        colors: [.blue, .purple],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .symbolEffect(.bounce, value: currentStep)
+            
+            VStack(spacing: 12) {
+                Text("Welcome to Invoke")
+                    .font(.largeTitle)
+                    .fontWeight(.bold)
                 
-                // Right Content
-                ZStack {
-                    switch currentStep {
-                    case .welcome:
-                        WelcomeStep(action: nextStep, color: hermesBlue)
-                    case .permissions:
-                        PermissionStep(mic: $micPermission, acc: $accessibilityPermission, next: nextStep, color: hermesBlue)
-                    case .ready:
-                        ReadyStep(action: onFinish, color: hermesBlue)
-                    }
+                Text("AI-powered coding assistant\nSeamlessly integrated with Gemini")
+                    .multilineTextAlignment(.center)
+                    .font(.body)
+                    .foregroundColor(.secondary)
+            }
+            
+            Spacer()
+            
+            Button(action: { withAnimation { currentStep = 1 } }) {
+                Text("See How It Works")
+                    .font(.headline)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .padding(.horizontal, 60)
+            
+            Spacer().frame(height: 20)
+        }
+        .padding()
+    }
+    
+    // MARK: - Step 1: Animation Demo
+    var animationDemoView: some View {
+        VStack(spacing: 20) {
+            Text("How Invoke Works")
+                .font(.title2)
+                .fontWeight(.bold)
+            
+            Text("Watch the magic flow")
+                .font(.callout)
+                .foregroundColor(.secondary)
+            
+            Spacer().frame(height: 10)
+            
+            // 动画演示区域
+            WorkflowAnimationView()
+                .frame(height: 280)
+            
+            Spacer()
+            
+            Button(action: { withAnimation { currentStep = 2 } }) {
+                HStack {
+                    Text("Continue")
+                    Image(systemName: "arrow.right")
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding(40)
+                .font(.headline)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 10)
             }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .padding(.horizontal, 60)
+            
+            Button(action: { withAnimation { currentStep = 0 } }) {
+                Text("Back")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            .buttonStyle(.plain)
+            
+            Spacer().frame(height: 10)
         }
-        .frame(width: 720, height: 440)
-        .onAppear {
-            micPermission = PermissionsManager.shared.microphonePermission.isGranted
-            accessibilityPermission = PermissionsManager.shared.accessibilityPermission.isGranted
-        }
+        .padding()
     }
     
-    func nextStep() {
-        withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
-            if let next = Step(rawValue: currentStep.rawValue + 1) {
-                currentStep = next
+    // MARK: - Step 2: Mode Selection
+    var modeSelectionView: some View {
+        VStack(spacing: 24) {
+            VStack(spacing: 8) {
+                Image(systemName: "slider.horizontal.3")
+                    .font(.system(size: 50))
+                    .foregroundColor(.blue)
+                
+                Text("Choose Your Mode")
+                    .font(.title2)
+                    .fontWeight(.bold)
+                
+                Text("You can change this anytime")
+                    .font(.callout)
+                    .foregroundColor(.secondary)
             }
+            
+            VStack(spacing: 12) {
+                ModeOptionCard(
+                    mode: .localOnly,
+                    selected: selectedMode == .localOnly,
+                    onSelect: { selectedMode = .localOnly }
+                )
+                
+                ModeOptionCard(
+                    mode: .safe,
+                    selected: selectedMode == .safe,
+                    onSelect: { selectedMode = .safe }
+                )
+                
+                ModeOptionCard(
+                    mode: .yolo,
+                    selected: selectedMode == .yolo,
+                    onSelect: { selectedMode = .yolo }
+                )
+            }
+            .padding(.horizontal)
+            
+            Spacer()
+            
+            Button(action: {
+                withAnimation { currentStep = selectedMode == .localOnly ? 4 : 3 }
+            }) {
+                Text("Continue")
+                    .font(.headline)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .padding(.horizontal, 60)
+            
+            Button(action: { withAnimation { currentStep = 1 } }) {
+                Text("Back")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            .buttonStyle(.plain)
+            
+            Spacer().frame(height: 10)
         }
+        .padding()
     }
-}
-
-// MARK: - Step Views
-struct WelcomeStep: View {
-    var action: () -> Void
-    var color: Color
     
-    var body: some View {
+    // MARK: - Step 3: Permissions
+    var permissionsView: some View {
         VStack(spacing: 24) {
             Spacer()
             
-            Image(systemName: "hand.rays")
-                .font(.system(size: 100))
-                .symbolRenderingMode(.palette)
-                .foregroundStyle(.white, color)
-                .shadow(color: color.opacity(0.3), radius: 10, x: 0, y: 5)
+            Image(systemName: "hand.raised.square.fill")
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(width: 70, height: 70)
+                .foregroundColor(.orange)
             
             VStack(spacing: 8) {
-                Text("Invoke")
-                    .font(.system(size: 26, weight: .bold, design: .default))
-                    .multilineTextAlignment(.center)
+                Text("Git Access Required")
+                    .font(.title2)
+                    .fontWeight(.bold)
                 
-                Text("Power at your fingertips.")
-                    .font(.system(size: 13, weight: .medium))
+                Text("Mode: \(selectedMode.rawValue)")
+                    .font(.callout)
+                    .foregroundColor(.blue)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 4)
+                    .background(Color.blue.opacity(0.1))
+                    .cornerRadius(8)
+                
+                Text("Invoke needs accessibility permission to auto-paste in browser")
+                    .multilineTextAlignment(.center)
+                    .font(.callout)
                     .foregroundColor(.secondary)
-                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
             }
             
-            Spacer()
-            PrimaryButton(title: "Get Started", color: color, action: action)
-        }
-        .transition(.asymmetric(insertion: .move(edge: .trailing).combined(with: .opacity), removal: .move(edge: .leading).combined(with: .opacity)))
-    }
-}
-
-struct PermissionStep: View {
-    @Binding var mic: Bool
-    @Binding var acc: Bool
-    var next: () -> Void
-    var color: Color
-    
-    var body: some View {
-        VStack(spacing: 24) {
-            HeaderTextView(title: "Permissions", subtitle: "Grant access for optimal experience.")
+            VStack(alignment: .leading, spacing: 16) {
+                PermissionRow(
+                    icon: "keyboard",
+                    title: "Accessibility Access",
+                    description: "Required to auto-paste code in browser",
+                    isGranted: permissions.accessibilityPermission.isGranted
+                )
+            }
+            .padding()
+            .background(Color.black.opacity(0.1))
+            .cornerRadius(12)
+            .padding(.horizontal)
             
-            VStack(spacing: 12) {
-                PermissionRow(icon: "mic.fill", title: "Microphone", isGranted: $mic, accentColor: color) {
-                    PermissionsManager.shared.requestMicrophonePermission { granted in
-                        withAnimation { mic = granted }
+            Spacer()
+            
+            if permissions.accessibilityPermission.isGranted {
+                Button(action: {
+                    withAnimation { currentStep = 4 }
+                }) {
+                    HStack {
+                        Text("Continue")
+                        Image(systemName: "arrow.right")
                     }
+                    .font(.headline)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
                 }
-                PermissionRow(icon: "keyboard.fill", title: "Accessibility", isGranted: $acc, accentColor: color) {
-                    PermissionsManager.shared.requestAccessibilityPermission()
-                    Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { timer in
-                        if AXIsProcessTrusted() {
-                            withAnimation { acc = true }
-                            timer.invalidate()
-                        }
-                    }
+                .buttonStyle(.borderedProminent)
+                .tint(.green)
+                .controlSize(.large)
+                .padding(.horizontal, 60)
+            } else {
+                Button(action: {
+                    permissions.requestAccessibilityPermission()
+                }) {
+                    Text("Grant Access")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
                 }
-            }
-            
-            Spacer()
-            PrimaryButton(title: "Continue", color: color, isDisabled: !(mic && acc), action: next)
-        }
-    }
-}
-
-struct ReadyStep: View {
-    var action: () -> Void
-    var color: Color
-    
-    var body: some View {
-        VStack(spacing: 24) {
-            Spacer()
-            
-            ZStack {
-                Circle().fill(Color.green.opacity(0.15)).frame(width: 80, height: 80)
-                Image(systemName: "checkmark")
-                    .font(.system(size: 36, weight: .bold))
-                    .foregroundColor(.green)
-            }
-            
-            VStack(spacing: 12) {
-                Text("All Set!")
-                    .font(.system(size: 24, weight: .bold))
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .padding(.horizontal, 60)
                 
-                Text("You're ready to go.")
+                Text("Will open System Settings")
+                    .font(.caption2)
                     .foregroundColor(.secondary)
             }
             
-            Spacer()
-            PrimaryButton(title: "Launch Invoke", color: color, action: action)
-        }
-    }
-}
-
-// MARK: - Helper
-extension View {
-    func border(width: CGFloat, edges: [Edge], color: Color) -> some View {
-        overlay(EdgeBorder(width: width, edges: edges).foregroundColor(color))
-    }
-}
-
-struct EdgeBorder: Shape {
-    var width: CGFloat
-    var edges: [Edge]
-    
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        for edge in edges {
-            var x: CGFloat = 0, y: CGFloat = 0, w: CGFloat = 0, h: CGFloat = 0
-            switch edge {
-            case .top: x = rect.minX; y = rect.minY; w = rect.width; h = width
-            case .bottom: x = rect.minX; y = rect.maxY - width; w = rect.width; h = width
-            case .leading: x = rect.minX; y = rect.minY; w = width; h = rect.height
-            case .trailing: x = rect.maxX - width; y = rect.minY; w = width; h = rect.height
+            Button(action: { withAnimation { currentStep = 2 } }) {
+                Text("Back")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
-            path.addRect(CGRect(x: x, y: y, width: w, height: h))
+            .buttonStyle(.plain)
+            
+            Spacer().frame(height: 20)
         }
-        return path
+        .padding()
+        .onAppear {
+            permissions.checkAccessibilityPermission()
+        }
+    }
+    
+    // MARK: - Step 4: Gemini Setup
+    var geminiSetupView: some View {
+        VStack(spacing: 24) {
+            Spacer()
+            
+            HStack(spacing: 20) {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 50))
+                    .foregroundColor(.purple)
+                
+                Image(systemName: "arrow.right")
+                    .font(.system(size: 30))
+                    .foregroundColor(.secondary)
+                
+                Image(systemName: "link")
+                    .font(.system(size: 50))
+                    .foregroundColor(.blue)
+            }
+            
+            VStack(spacing: 8) {
+                Text("One More Thing")
+                    .font(.title2)
+                    .fontWeight(.bold)
+                
+                Text("Connect Gemini with your repository")
+                    .font(.callout)
+                    .foregroundColor(.secondary)
+            }
+            
+            VStack(alignment: .leading, spacing: 12) {
+                InstructionRow(number: "1", text: "Open gemini.google.com")
+                InstructionRow(number: "2", text: "Start a new conversation")
+                InstructionRow(number: "3", text: "Click the attachment icon (📎)")
+                InstructionRow(number: "4", text: "Select 'Add GitHub repository'")
+                InstructionRow(number: "5", text: "Connect your project repository")
+            }
+            .padding()
+            .background(Color.black.opacity(0.05))
+            .cornerRadius(12)
+            .padding(.horizontal)
+            
+            Text("✨ This allows Gemini to see your latest code changes automatically")
+                .font(.caption)
+                .foregroundColor(.green)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal)
+            
+            Spacer()
+            
+            Button(action: {
+                // 保存选择的模式
+                UserDefaults.standard.set(selectedMode.rawValue, forKey: "GitMode")
+                withAnimation {
+                    hasCompletedOnboarding = true
+                }
+            }) {
+                HStack {
+                    Text("Start Coding")
+                    Image(systemName: "arrow.right.circle.fill")
+                }
+                .font(.headline)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.green)
+            .controlSize(.large)
+            .padding(.horizontal, 60)
+            
+            Button(action: { withAnimation { currentStep = selectedMode == .localOnly ? 2 : 3 } }) {
+                Text("Back")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            .buttonStyle(.plain)
+            
+            Spacer().frame(height: 10)
+        }
+        .padding()
     }
 }

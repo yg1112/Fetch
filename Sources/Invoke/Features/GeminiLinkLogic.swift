@@ -17,8 +17,34 @@ class GeminiLinkLogic: ObservableObject {
         didSet {
             UserDefaults.standard.set(projectRoot, forKey: "ProjectRoot")
             loadLogs()
+            // 选择项目后自动开启监听
+            if !projectRoot.isEmpty && !isListening {
+                startListening()
+            }
         }
     }
+    
+    // Git 模式：Local Only / Safe (PR) / YOLO (Direct Push)
+    enum GitMode: String, CaseIterable {
+        case localOnly = "Local Only"
+        case safe = "Safe"
+        case yolo = "YOLO"
+        
+        var description: String {
+            switch self {
+            case .localOnly: return "Local commits only"
+            case .safe: return "Create PR"
+            case .yolo: return "Direct Push"
+            }
+        }
+    }
+    
+    @Published var gitMode: GitMode = GitMode(rawValue: UserDefaults.standard.string(forKey: "GitMode") ?? "yolo") ?? .yolo {
+        didSet {
+            UserDefaults.standard.set(gitMode.rawValue, forKey: "GitMode")
+        }
+    }
+    
     @Published var isListening: Bool = false
     
     // MARK: - Data Source
@@ -59,22 +85,27 @@ class GeminiLinkLogic: ObservableObject {
         }
     }
 
-    // MARK: - Core Flow (Sync)
-    func toggleListening() {
-        isListening.toggle()
-        if isListening {
-            print("👂 Listen mode ACTIVATED - monitoring clipboard...")
-            lastChangeCount = pasteboard.changeCount
-            timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-                self?.checkClipboard()
-            }
-            showNotification(title: "Sync Started", body: "Monitoring clipboard for changes")
-        } else {
-            print("🛑 Listen mode DEACTIVATED")
-            timer?.invalidate()
-            timer = nil
-            showNotification(title: "Sync Stopped", body: "No longer monitoring clipboard")
+    // MARK: - Core Flow (自动监听)
+    
+    /// 启动自动监听（选择项目后自动调用）
+    func startListening() {
+        guard !isListening else { return }
+        isListening = true
+        print("👂 Auto-listening ACTIVATED - monitoring clipboard...")
+        lastChangeCount = pasteboard.changeCount
+        timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            self?.checkClipboard()
         }
+        showNotification(title: "Ready", body: "Monitoring clipboard for Gemini code")
+    }
+    
+    /// 停止监听（一般不需要手动调用）
+    func stopListening() {
+        guard isListening else { return }
+        isListening = false
+        print("🛑 Listen mode STOPPED")
+        timer?.invalidate()
+        timer = nil
     }
     
     private func checkClipboard() {
@@ -142,25 +173,59 @@ class GeminiLinkLogic: ObservableObject {
     }
     
     private func autoCommitAndPush(message: String, summary: String) {
-        print("🚀 Starting Git commit & push...")
+        print("🚀 Starting Git operation (\(gitMode.rawValue) mode)...")
         DispatchQueue.global(qos: .userInitiated).async {
             do {
-                _ = try GitService.shared.pushChanges(in: self.projectRoot, message: message)
+                // 1. Commit 本地改动
+                _ = try GitService.shared.commitChanges(in: self.projectRoot, message: message)
                 let commitHash = (try? GitService.shared.run(args: ["rev-parse", "--short", "HEAD"], in: self.projectRoot)) ?? "unknown"
                 
-                print("✅ Git push successful: \(commitHash)")
+                // 2. Local Only 模式：只提交不推送
+                if self.gitMode == .localOnly {
+                    print("✅ Local commit completed: \(commitHash)")
+                    DispatchQueue.main.async {
+                        let newLog = ChangeLog(commitHash: commitHash, timestamp: Date(), summary: summary)
+                        self.changeLogs.insert(newLog, at: 0)
+                        self.saveLogs()
+                        self.showNotification(title: "Local Commit", body: summary)
+                        NSSound(named: "Glass")?.play()
+                    }
+                    return
+                }
                 
-                DispatchQueue.main.async {
-                    let newLog = ChangeLog(commitHash: commitHash, timestamp: Date(), summary: summary)
-                    self.changeLogs.insert(newLog, at: 0)
-                    self.saveLogs()
-                    self.showNotification(title: "Sync Complete", body: summary)
-                    NSSound(named: "Glass")?.play()
+                // 3. 根据模式执行推送操作
+                if self.gitMode == .yolo {
+                    // YOLO 模式：直接 push
+                    _ = try GitService.shared.pushToRemote(in: self.projectRoot)
+                    print("✅ Git push successful: \(commitHash)")
+                    
+                    DispatchQueue.main.async {
+                        let newLog = ChangeLog(commitHash: commitHash, timestamp: Date(), summary: summary)
+                        self.changeLogs.insert(newLog, at: 0)
+                        self.saveLogs()
+                        self.showNotification(title: "Pushed", body: summary)
+                        NSSound(named: "Glass")?.play()
+                    }
+                } else {
+                    // Safe 模式：创建 PR
+                    let branchName = "invoke-\(commitHash)"
+                    try GitService.shared.createBranch(in: self.projectRoot, name: branchName)
+                    _ = try GitService.shared.pushBranch(in: self.projectRoot, branch: branchName)
+                    
+                    print("✅ Branch created and pushed: \(branchName)")
+                    
+                    DispatchQueue.main.async {
+                        let newLog = ChangeLog(commitHash: commitHash, timestamp: Date(), summary: summary)
+                        self.changeLogs.insert(newLog, at: 0)
+                        self.saveLogs()
+                        self.showNotification(title: "PR Ready", body: "Branch: \(branchName)")
+                        NSSound(named: "Glass")?.play()
+                    }
                 }
             } catch {
                 print("❌ Git Error: \(error)")
                 DispatchQueue.main.async {
-                    self.showNotification(title: "Sync Failed", body: error.localizedDescription)
+                    self.showNotification(title: "Git Failed", body: error.localizedDescription)
                 }
             }
         }
@@ -214,28 +279,57 @@ class GeminiLinkLogic: ObservableObject {
         }
     }
     
-    func validateCommit(_ log: ChangeLog) {
+    /// Review 最后一次改动（点击 Review 按钮）
+    func reviewLastChange() {
+        guard let lastLog = changeLogs.first else {
+            print("⚠️ No commits to review")
+            showNotification(title: "Nothing to Review", body: "No recent changes")
+            return
+        }
+        
+        print("🔍 Reviewing commit: \(lastLog.commitHash)")
+        
         DispatchQueue.global().async {
-            let diff = try? GitService.shared.run(args: ["show", log.commitHash], in: self.projectRoot)
+            let diff = try? GitService.shared.run(args: ["show", lastLog.commitHash], in: self.projectRoot)
             
             let prompt = """
-            Please VALIDATE this specific commit: \(log.commitHash).
-            Here is the `git show` output:
+            Please REVIEW this commit I just made:
             
+            **Commit:** \(lastLog.commitHash)
+            **Summary:** \(lastLog.summary)
+            
+            **Changes:**
+            ```
             \(diff ?? "Error reading diff")
+            ```
             
-            Task:
-            1. Review logic errors.
-            2. If CORRECT, reply: "Verified".
-            3. If WRONG, output the FIX using the Base64 Protocol.
+            **Task:**
+            1. Analyze if the changes are correct and complete.
+            2. If CORRECT, reply: "✅ Verified - changes look good!"
+            3. If there are ISSUES, provide the FIX using the Base64 Protocol:
+            
+            ```text
+            \(self.markerStart) <relative_path>
+            <base64_string_of_full_file_content>
+            \(self.markerEnd)
+            ```
+            
+            Ready to review?
             """
             
             DispatchQueue.main.async {
                 self.pasteboard.clearContents()
                 self.pasteboard.setString(prompt, forType: .string)
                 
-                // 同样触发自动粘贴
-                MagicPaster.shared.pasteToBrowser()
+                // 检查权限并粘贴
+                let hasPermission = AXIsProcessTrusted()
+                if hasPermission {
+                    print("🎯 Auto-pasting review request...")
+                    MagicPaster.shared.pasteToBrowser()
+                } else {
+                    print("⚠️ Manual paste required")
+                    self.showNotification(title: "Review Request Ready", body: "Press Cmd+V in Gemini")
+                }
             }
         }
     }

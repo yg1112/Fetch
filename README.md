@@ -2,11 +2,24 @@
 
 A macOS utility for real-time Git synchronization with AI pair programming support.
 
+## ✨ New: Three-Mode System
+
+Invoke now offers **three Git workflows** to match your needs:
+
+- 🔒 **Local Only**: Commit locally without pushing (perfect for privacy/experiments)
+- 🔀 **Safe**: Create PR branches for team review
+- ⚡ **YOLO**: Direct push to main (fast prototyping)
+
+See [Three-Mode System Guide](docs/THREE_MODE_SYSTEM.md) | [中文指南](docs/THREE_MODE_SYSTEM_CN.md)
+
 ## Features
 
 - 🔄 Real-time Git change tracking and auto-commit
 - 🤖 Gemini AI integration for pair programming
+- 🎯 Three flexible Git modes (Local Only / Safe / YOLO)
+- 🎬 Animated onboarding with workflow demo
 - 📁 Project folder selection with full system permissions
+- 🔗 Clickable commit links to GitHub
 - ⚡️ Floating panel UI for quick access
 - 🔐 Proper entitlements and code signing
 

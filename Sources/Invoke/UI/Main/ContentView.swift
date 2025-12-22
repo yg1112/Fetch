@@ -17,37 +17,56 @@ struct ContentView: View {
             // 2. 内容层
             VStack(spacing: 0) {
                 
-                // === HEADER (Status & Project) ===
-                HStack(spacing: 12) {
-                    // Status Dot
-                    Circle()
-                        .fill(logic.isListening ? activeGreen : Color.secondary.opacity(0.5))
-                        .frame(width: 6, height: 6)
-                        .shadow(color: logic.isListening ? activeGreen.opacity(0.6) : .clear, radius: 4)
-                    
-                    // Project Path (Clickable Text)
-                    Button(action: logic.selectProjectRoot) {
-                        HStack(spacing: 4) {
-                            Image(systemName: "folder")
-                                .font(.system(size: 10, weight: .bold))
-                            Text(logic.projectRoot.isEmpty ? "Select Project..." : URL(fileURLWithPath: logic.projectRoot).lastPathComponent)
-                                .font(.system(size: 11, weight: .medium))
+                // === HEADER (Status & Project & Mode) ===
+                VStack(spacing: 8) {
+                    HStack(spacing: 12) {
+                        // Status Dot
+                        Circle()
+                            .fill(logic.isListening ? activeGreen : Color.secondary.opacity(0.5))
+                            .frame(width: 6, height: 6)
+                            .shadow(color: logic.isListening ? activeGreen.opacity(0.6) : .clear, radius: 4)
+                        
+                        // Project Path (Clickable Text)
+                        Button(action: logic.selectProjectRoot) {
+                            HStack(spacing: 4) {
+                                Image(systemName: "folder")
+                                    .font(.system(size: 10, weight: .bold))
+                                Text(logic.projectRoot.isEmpty ? "Select Project..." : URL(fileURLWithPath: logic.projectRoot).lastPathComponent)
+                                    .font(.system(size: 11, weight: .medium))
+                            }
+                            .foregroundColor(.secondary)
                         }
-                        .foregroundColor(.secondary)
+                        .buttonStyle(.plain)
+                        
+                        Spacer()
+                        
+                        // Close Button (Ghost Style)
+                        Button(action: { NSApplication.shared.terminate(nil) }) {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundColor(.secondary.opacity(0.5))
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.trailing, 4)
                     }
-                    .buttonStyle(.plain)
                     
-                    Spacer()
-                    
-                    // Close Button (Ghost Style)
-                    Button(action: { NSApplication.shared.terminate(nil) }) {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 10, weight: .bold))
-                            .foregroundColor(.secondary.opacity(0.5))
-                            .contentShape(Rectangle())
+                    // Mode Selector
+                    HStack(spacing: 8) {
+                        Text("Mode:")
+                            .font(.system(size: 9))
+                            .foregroundColor(.secondary)
+                        
+                        Picker("", selection: $logic.gitMode) {
+                            ForEach(GeminiLinkLogic.GitMode.allCases, id: \.self) { mode in
+                                Text(mode.rawValue).tag(mode)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .frame(width: 140)
+                        
+                        Spacer()
                     }
-                    .buttonStyle(.plain)
-                    .padding(.trailing, 4)
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 14)
@@ -82,7 +101,7 @@ struct ContentView: View {
                         title: "Pair",
                         icon: "link",
                         color: activeBlue,
-                        isActive: false // Pair 是瞬时动作，不需要高亮状态
+                        isActive: false
                     ) {
                         logic.copyProtocol()
                     }
@@ -92,14 +111,14 @@ struct ContentView: View {
                         .frame(height: 20)
                         .opacity(0.2)
                     
-                    // RIGHT: SYNC
+                    // RIGHT: REVIEW
                     BigActionButton(
-                        title: logic.isListening ? "Syncing" : "Sync",
-                        icon: logic.isListening ? "arrow.triangle.2.circlepath" : "play",
-                        color: logic.isListening ? activeGreen : .primary,
-                        isActive: logic.isListening
+                        title: "Review",
+                        icon: "checkmark.magnifyingglass",
+                        color: .orange,
+                        isActive: false
                     ) {
-                        logic.toggleListening()
+                        logic.reviewLastChange()
                     }
                 }
                 .frame(height: 50)
@@ -143,13 +162,23 @@ struct LogItemRow: View {
     
     var body: some View {
         HStack(alignment: .center, spacing: 10) {
-            // Commit Hash
-            Text(log.commitHash)
-                .font(.system(size: 9, design: .monospaced))
-                .foregroundColor(.secondary)
+            // Commit Hash (Clickable Link)
+            Button(action: {
+                openCommitInBrowser()
+            }) {
+                HStack(spacing: 4) {
+                    Text(log.commitHash)
+                        .font(.system(size: 9, design: .monospaced))
+                    Image(systemName: "arrow.up.forward.square")
+                        .font(.system(size: 8))
+                }
+                .foregroundColor(.blue)
                 .padding(4)
-                .background(Color.white.opacity(0.05))
+                .background(Color.blue.opacity(0.1))
                 .cornerRadius(4)
+            }
+            .buttonStyle(.plain)
+            .help("Open commit in browser")
             
             // Summary
             Text(log.summary)
@@ -158,20 +187,22 @@ struct LogItemRow: View {
                 .lineLimit(1)
             
             Spacer()
-            
-            // Validate Action
-            Button(action: { logic.validateCommit(log) }) {
-                Image(systemName: "checkmark.magnifyingglass")
-                    .font(.system(size: 10))
-                    .foregroundColor(log.isValidated ? .green : .secondary)
-            }
-            .buttonStyle(.plain)
-            .help("Verify this change")
         }
         .padding(.vertical, 8)
         .padding(.horizontal, 4)
-        // 鼠标悬停高亮
         .contentShape(Rectangle())
+    }
+    
+    /// 在浏览器中打开 commit 页面
+    private func openCommitInBrowser() {
+        guard let commitURL = GitService.shared.getCommitURL(for: log.commitHash, in: logic.projectRoot),
+              let url = URL(string: commitURL) else {
+            print("⚠️ Could not construct commit URL")
+            return
+        }
+        
+        print("🌐 Opening commit in browser: \(commitURL)")
+        NSWorkspace.shared.open(url)
     }
 }
 

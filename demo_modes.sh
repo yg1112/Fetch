@@ -1,0 +1,98 @@
+#!/bin/bash
+
+# Demo Script: Three-Mode System
+# This script demonstrates the three Git modes in Invoke
+
+echo "🎯 Invoke - Three-Mode System Demo"
+echo "===================================="
+echo ""
+
+# Colors
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+RED='\033[0;31m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+echo -e "${BLUE}📋 Available Modes:${NC}"
+echo ""
+echo -e "${GREEN}1. Local Only${NC} 🔒"
+echo "   - Commits changes locally only"
+echo "   - No Git push to remote"
+echo "   - Perfect for: Privacy, experiments, learning"
+echo "   - Permissions: None required"
+echo ""
+echo -e "${YELLOW}2. Safe (PR Mode)${NC} 🔀"
+echo "   - Creates a new branch"
+echo "   - Pushes to remote"
+echo "   - Ready for Pull Request"
+echo "   - Perfect for: Team projects, code review"
+echo "   - Permissions: Git credentials"
+echo ""
+echo -e "${RED}3. YOLO (Direct Push)${NC} ⚡"
+echo "   - Commits and pushes directly to main"
+echo "   - No branch creation"
+echo "   - Perfect for: Personal projects, rapid prototyping"
+echo "   - Permissions: Git credentials"
+echo ""
+
+echo "===================================="
+echo "🎬 Onboarding Flow:"
+echo "===================================="
+echo ""
+echo "Step 1: Welcome Screen"
+echo "  └─ Brief intro + 'See How It Works' button"
+echo ""
+echo "Step 2: Animated Demo ✨"
+echo "  └─ Visual workflow: Gemini → Invoke → Code"
+echo "  └─ Electricity flow animation"
+echo "  └─ Loops every 5 seconds"
+echo ""
+echo "Step 3: Mode Selection"
+echo "  └─ Choose Local Only / Safe / YOLO"
+echo "  └─ Card-based UI with descriptions"
+echo ""
+echo "Step 4: Permissions (conditional)"
+echo "  └─ Skipped if Local Only mode"
+echo "  └─ Shows: Accessibility + Git Credentials"
+echo ""
+echo "Step 5: Gemini GitHub Setup"
+echo "  └─ Instructions to connect Gemini with repo"
+echo "  └─ Use 'Upload Repository' feature"
+echo ""
+
+echo "===================================="
+echo "💡 Quick Tips:"
+echo "===================================="
+echo ""
+echo "• Switch modes anytime via header picker"
+echo "• Local Only = No permissions needed"
+echo "• Connect Gemini to GitHub for auto-context"
+echo "• Review button shows last commit diff"
+echo ""
+
+echo "===================================="
+echo "🚀 Launch Commands:"
+echo "===================================="
+echo ""
+echo "# Normal launch"
+echo "open Invoke.app"
+echo ""
+echo "# Reset onboarding (to see animation again)"
+echo "defaults delete Invoke-55554944651bc2573ba13ae4885b881bf7cb77fb hasCompletedOnboarding"
+echo "open Invoke.app"
+echo ""
+echo "# Debug mode"
+echo "./Invoke.app/Contents/MacOS/Invoke 2>&1 | tee invoke_debug.log"
+echo ""
+
+echo "===================================="
+echo "📚 Documentation:"
+echo "===================================="
+echo ""
+echo "English: docs/THREE_MODE_SYSTEM.md"
+echo "中文: docs/THREE_MODE_SYSTEM_CN.md"
+echo "Implementation: docs/IMPLEMENTATION_SUMMARY.md"
+echo ""
+
+echo "✅ Demo complete!"
