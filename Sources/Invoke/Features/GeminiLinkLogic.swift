@@ -46,6 +46,8 @@ class GeminiLinkLogic: ObservableObject {
     }
     
     @Published var isListening: Bool = false
+    @Published var isProcessing: Bool = false  // 本地编辑状态指示
+    @Published var processingStatus: String = ""  // 处理状态描述
     
     // MARK: - Data Source
     @Published var changeLogs: [ChangeLog] = []
@@ -53,6 +55,10 @@ class GeminiLinkLogic: ObservableObject {
     private var timer: Timer?
     private let pasteboard = NSPasteboard.general
     private var lastChangeCount: Int = 0
+    
+    // 🎯 隐形剪贴板：保存用户最后的"非协议"内容
+    private var lastUserClipboard: String = ""
+    private var lastUserClipboardTime: Date = Date()
     
     // Protocol Markers
     private let markerStart = "!!!B64_START!!!"
@@ -71,6 +77,8 @@ class GeminiLinkLogic: ObservableObject {
             panel.allowsMultipleSelection = false
             panel.prompt = "Select Root"
             panel.directoryURL = FileManager.default.homeDirectoryForCurrentUser
+            
+            NSApp.activate(ignoringOtherApps: true)
             
             NSApp.activate(ignoringOtherApps: true)
             
@@ -93,10 +101,19 @@ class GeminiLinkLogic: ObservableObject {
         isListening = true
         print("👂 Auto-listening ACTIVATED - monitoring clipboard...")
         lastChangeCount = pasteboard.changeCount
-        timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+        
+        // 🎯 保存当前剪贴板作为用户的"正常"内容
+        if let currentContent = pasteboard.string(forType: .string),
+           !currentContent.contains(markerStart) {
+            lastUserClipboard = currentContent
+            lastUserClipboardTime = Date()
+            print("💾 Initial user clipboard saved: \(String(currentContent.prefix(50)))...")
+        }
+        
+        timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             self?.checkClipboard()
         }
-        showNotification(title: "Ready", body: "Monitoring clipboard for Gemini code")
+        showNotification(title: "Ready", body: "Invisible clipboard mode active")
     }
     
     /// 停止监听（一般不需要手动调用）
@@ -114,27 +131,168 @@ class GeminiLinkLogic: ObservableObject {
         
         guard let content = pasteboard.string(forType: .string) else { return }
         
-        // 检测到剪贴板变化
-        if content.contains(markerStart) {
+        // 🎯 检测 Shell 脚本格式 (cat << 'EOF' > file)
+        if content.contains("cat <<") && content.contains("EOF") {
+            print("🔍 Detected shell script format in clipboard!")
+            print("📋 Content length: \(content.count) chars")
+            
+            // 立刻恢复用户之前的剪贴板内容
+            restoreUserClipboardImmediately()
+            
+            DispatchQueue.main.async {
+                self.isProcessing = true
+                self.processingStatus = "Detecting code..."
+            }
+            
+            showNotification(title: "Code Detected", body: "Applying changes...")
+            processShellScript(content)
+            
+        } else if content.contains(markerStart) {
+            // 兼容旧的 Base64 格式
             print("🔍 Detected Base64 protocol in clipboard!")
-            showNotification(title: "Code Detected", body: "Processing changes...")
+            restoreUserClipboardImmediately()
+            
+            DispatchQueue.main.async {
+                self.isProcessing = true
+                self.processingStatus = "Detecting code..."
+            }
+            
+            showNotification(title: "Code Detected", body: "Applying changes...")
             processClipboardContent(content)
+            
+        } else {
+            // 普通内容 → 保存为用户的"正常"剪贴板
+            if !content.isEmpty && content.count < 50000 && !content.contains("@code") {
+                lastUserClipboard = content
+                lastUserClipboardTime = Date()
+            }
         }
     }
     
-    private func processClipboardContent(_ rawText: String) {
+    /// 立刻恢复用户剪贴板（让协议代码"消失"）
+    private func restoreUserClipboardImmediately() {
+        guard !lastUserClipboard.isEmpty else {
+            print("⚠️ No previous user clipboard to restore")
+            return
+        }
+        
+        // 微小延迟确保我们已经读取了协议内容
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            self.pasteboard.clearContents()
+            self.pasteboard.setString(self.lastUserClipboard, forType: .string)
+            self.lastChangeCount = self.pasteboard.changeCount  // 防止重复触发
+            print("♻️ User clipboard restored instantly!")
+        }
+    }
+    
+    // MARK: - 新格式：Shell 脚本解析 (cat << 'EOF' > file)
+    
+    private func processShellScript(_ rawText: String) {
+        DispatchQueue.main.async {
+            self.processingStatus = "Parsing shell commands..."
+        }
+        
+        // 匹配格式: cat << 'EOF' > path/to/file.swift ... EOF
+        // 或者: cat <<'EOF' > path/to/file.swift ... EOF
         let pattern = try! NSRegularExpression(
-            pattern: "\(NSRegularExpression.escapedPattern(for: markerStart))\\s+(.*?)\\s+(.*?)\\s+\(NSRegularExpression.escapedPattern(for: markerEnd))",
-            options: .dotMatchesLineSeparators
+            pattern: "cat\\s*<<\\s*'?EOF'?\\s*>\\s*([^\\n]+)\\n([\\s\\S]*?)\\nEOF",
+            options: []
+        )
+        let matches = pattern.matches(in: rawText, options: [], range: NSRange(rawText.startIndex..<rawText.endIndex, in: rawText))
+        
+        if matches.isEmpty {
+            print("⚠️ No valid cat << EOF blocks found")
+            print("📝 Content preview: \(String(rawText.prefix(500)))")
+            
+            DispatchQueue.main.async {
+                self.isProcessing = false
+                self.processingStatus = ""
+                self.showNotification(title: "Parse Error", body: "No valid shell commands found")
+            }
+            return
+        }
+        
+        print("✅ Found \(matches.count) file(s) to create/update")
+        DispatchQueue.main.async {
+            self.processingStatus = "Writing \(matches.count) file(s)..."
+        }
+        
+        var updatedFiles: [String] = []
+        
+        for match in matches {
+            if let pathRange = Range(match.range(at: 1), in: rawText),
+               let contentRange = Range(match.range(at: 2), in: rawText) {
+                let filePath = String(rawText[pathRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+                let fileContent = String(rawText[contentRange])
+                
+                print("📄 Processing: \(filePath)")
+                print("📦 Content length: \(fileContent.count) chars")
+                
+                if writeFileDirectly(relativePath: filePath, content: fileContent) {
+                    updatedFiles.append(filePath)
+                }
+            }
+        }
+        
+        if !updatedFiles.isEmpty {
+            DispatchQueue.main.async {
+                self.processingStatus = "Committing changes..."
+            }
+            let summary = "Update: \(updatedFiles.map { URL(fileURLWithPath: $0).lastPathComponent }.joined(separator: ", "))"
+            autoCommitAndPush(message: summary, summary: summary)
+        } else {
+            DispatchQueue.main.async {
+                self.isProcessing = false
+                self.processingStatus = ""
+                self.showNotification(title: "No Changes", body: "No files were updated")
+            }
+        }
+    }
+    
+    /// 直接写入文件（不需要 Base64 解码）
+    private func writeFileDirectly(relativePath: String, content: String) -> Bool {
+        let fullURL = URL(fileURLWithPath: projectRoot).appendingPathComponent(relativePath)
+        do {
+            try FileManager.default.createDirectory(at: fullURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try content.write(to: fullURL, atomically: true, encoding: .utf8)
+            print("✅ Wrote: \(relativePath) (\(content.count) chars)")
+            return true
+        } catch {
+            print("❌ Write error: \(error)")
+            return false
+        }
+    }
+    
+    // MARK: - 旧格式：Base64 解析（兼容）
+    
+    private func processClipboardContent(_ rawText: String) {
+        DispatchQueue.main.async {
+            self.processingStatus = "Parsing Base64 blocks..."
+        }
+        
+        let pattern = try! NSRegularExpression(
+            pattern: "\(NSRegularExpression.escapedPattern(for: markerStart))\\s+([\\w/\\-\\.]+\\.\\w+)[\\s\\n]+([A-Za-z0-9+/=\\s\\n]+?)[\\s\\n]*\(NSRegularExpression.escapedPattern(for: markerEnd))",
+            options: [.dotMatchesLineSeparators]
         )
         let matches = pattern.matches(in: rawText, options: [], range: NSRange(rawText.startIndex..<rawText.endIndex, in: rawText))
         
         if matches.isEmpty {
             print("⚠️ No valid Base64 blocks found in clipboard")
+            print("📝 Raw text length: \(rawText.count) chars")
+            
+            DispatchQueue.main.async {
+                self.isProcessing = false
+                self.processingStatus = ""
+                self.showNotification(title: "Parse Error", body: "No valid Base64 blocks found. Check Gemini output format.")
+            }
             return
         }
         
         print("✅ Found \(matches.count) file(s) to update")
+        DispatchQueue.main.async {
+            self.processingStatus = "Writing \(matches.count) file(s)..."
+        }
+        
         var updatedFiles: [String] = []
         
         for match in matches {
@@ -143,6 +301,18 @@ class GeminiLinkLogic: ObservableObject {
                 let relPath = String(rawText[pathRange]).trimmingCharacters(in: .whitespacesAndNewlines)
                 let b64Content = String(rawText[contentRange]).trimmingCharacters(in: .whitespacesAndNewlines)
                 
+                print("📄 Processing file: \(relPath)")
+                print("📦 Base64 content length: \(b64Content.count) chars")
+                print("📦 Base64 preview: \(String(b64Content.prefix(100)))...")
+                
+                if b64Content.isEmpty || b64Content == "+" {
+                    print("❌ Invalid Base64 content for \(relPath): content is empty or just '+'")
+                    DispatchQueue.main.async {
+                        self.showNotification(title: "Invalid Content", body: "Base64 content for \(relPath) is empty")
+                    }
+                    continue
+                }
+                
                 if writeToFile(relativePath: relPath, base64Content: b64Content) {
                     updatedFiles.append(relPath)
                 }
@@ -150,21 +320,41 @@ class GeminiLinkLogic: ObservableObject {
         }
         
         if !updatedFiles.isEmpty {
+            DispatchQueue.main.async {
+                self.processingStatus = "Committing changes..."
+            }
             let summary = "Update: \(updatedFiles.map { URL(fileURLWithPath: $0).lastPathComponent }.joined(separator: ", "))"
             autoCommitAndPush(message: summary, summary: summary)
+        } else {
+            DispatchQueue.main.async {
+                self.isProcessing = false
+                self.processingStatus = ""
+                self.showNotification(title: "No Changes", body: "No files were updated")
+            }
         }
     }
     
     private func writeToFile(relativePath: String, base64Content: String) -> Bool {
-        guard let data = Data(base64Encoded: base64Content) else {
+        // 清理 Base64 内容：移除所有空格、换行符等
+        let cleanedBase64 = base64Content
+            .replacingOccurrences(of: "\n", with: "")
+            .replacingOccurrences(of: "\r", with: "")
+            .replacingOccurrences(of: " ", with: "")
+            .replacingOccurrences(of: "\t", with: "")
+        
+        print("🧹 Cleaned Base64 length: \(cleanedBase64.count) chars")
+        
+        guard let data = Data(base64Encoded: cleanedBase64) else {
             print("❌ Invalid Base64 for: \(relativePath)")
+            print("📝 First 100 chars of cleaned: \(String(cleanedBase64.prefix(100)))")
+            print("📝 Last 50 chars of cleaned: \(String(cleanedBase64.suffix(50)))")
             return false
         }
         let fullURL = URL(fileURLWithPath: projectRoot).appendingPathComponent(relativePath)
         do {
             try FileManager.default.createDirectory(at: fullURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             try data.write(to: fullURL)
-            print("✅ Wrote: \(relativePath)")
+            print("✅ Wrote: \(relativePath) (\(data.count) bytes)")
             return true
         } catch {
             print("❌ Write error: \(error)")
@@ -184,6 +374,8 @@ class GeminiLinkLogic: ObservableObject {
                 if self.gitMode == .localOnly {
                     print("✅ Local commit completed: \(commitHash)")
                     DispatchQueue.main.async {
+                        self.isProcessing = false
+                        self.processingStatus = ""
                         let newLog = ChangeLog(commitHash: commitHash, timestamp: Date(), summary: summary)
                         self.changeLogs.insert(newLog, at: 0)
                         self.saveLogs()
@@ -200,6 +392,8 @@ class GeminiLinkLogic: ObservableObject {
                     print("✅ Git push successful: \(commitHash)")
                     
                     DispatchQueue.main.async {
+                        self.isProcessing = false
+                        self.processingStatus = ""
                         let newLog = ChangeLog(commitHash: commitHash, timestamp: Date(), summary: summary)
                         self.changeLogs.insert(newLog, at: 0)
                         self.saveLogs()
@@ -215,6 +409,8 @@ class GeminiLinkLogic: ObservableObject {
                     print("✅ Branch created and pushed: \(branchName)")
                     
                     DispatchQueue.main.async {
+                        self.isProcessing = false
+                        self.processingStatus = ""
                         let newLog = ChangeLog(commitHash: commitHash, timestamp: Date(), summary: summary)
                         self.changeLogs.insert(newLog, at: 0)
                         self.saveLogs()
@@ -225,50 +421,108 @@ class GeminiLinkLogic: ObservableObject {
             } catch {
                 print("❌ Git Error: \(error)")
                 DispatchQueue.main.async {
+                    self.isProcessing = false
+                    self.processingStatus = ""
                     self.showNotification(title: "Git Failed", body: error.localizedDescription)
                 }
             }
         }
     }
     
+    // MARK: - Manual Apply (手动应用剪贴板内容)
+    
+    /// 手动触发剪贴板解析（当自动检测失败时使用）
+    func manualApplyFromClipboard() {
+        print("📥 Manual Apply triggered - reading clipboard...")
+        
+        guard let content = pasteboard.string(forType: .string) else {
+            print("⚠️ Clipboard is empty")
+            showNotification(title: "Empty Clipboard", body: "No content to apply")
+            return
+        }
+        
+        // 优先检测 Shell 脚本格式 (新格式)
+        if content.contains("cat <<") && content.contains("EOF") {
+            print("🔍 Found shell script format!")
+            print("📋 Content length: \(content.count) chars")
+            
+            DispatchQueue.main.async {
+                self.isProcessing = true
+                self.processingStatus = "Manual apply..."
+            }
+            
+            showNotification(title: "Applying Code", body: "Processing shell commands...")
+            processShellScript(content)
+            
+        } else if content.contains(markerStart) {
+            // 兼容旧的 Base64 格式
+            print("🔍 Found Base64 protocol markers!")
+            print("📋 Content length: \(content.count) chars")
+            
+            DispatchQueue.main.async {
+                self.isProcessing = true
+                self.processingStatus = "Manual apply..."
+            }
+            
+            showNotification(title: "Applying Code", body: "Processing Base64 content...")
+            processClipboardContent(content)
+            
+        } else {
+            print("⚠️ No recognized format in clipboard")
+            print("📋 Clipboard preview: \(String(content.prefix(200)))...")
+            showNotification(title: "No Code Found", body: "Expected: cat << 'EOF' > file format")
+        }
+    }
+    
     // MARK: - Protocol & Validation (The Brain)
     
-    func copyProtocol() {
-        print("🔗 Pair button clicked - preparing protocol...")
+    /// 首次设置：复制 Gemini Personal Context 指令
+    func copyGemSetupGuide() {
+        print("📖 Copying Gemini Personal Context instruction...")
         
-        // 1. 生成真实的项目结构 (Real Context Injection)
-        let structure = scanProjectStructure()
-        print("📂 Project structure scanned: \(structure.split(separator: "\n").count) lines")
-        
-        let prompt = """
-        You are my Senior AI Pair Programmer.
-        Current Project Context:
-        \(structure)
+        // 最佳实践：Shell 脚本格式，直接粘贴到终端就能创建文件
+        let instruction = """
+        When I say @code, respond with ONLY a shell command to create the file:
 
-        【PROTOCOL - STRICTLY ENFORCE】:
-        1. When I ask for changes, DO NOT explain.
-        2. Output only the CHANGED files using this Base64 format:
-        
-        ```text
-        \(markerStart) <relative_path>
-        <base64_string_of_full_file_content>
-        \(markerEnd)
+        ```bash
+        cat << 'EOF' > path/to/file.swift
+        <actual code here>
+        EOF
         ```
-        
-        3. If multiple files change, output multiple blocks sequentially.
-        4. I will auto-apply these changes.
-        
-        Ready? Await my instructions.
+
+        Rules:
+        - Multiple files = multiple cat commands in one code block
+        - NO explanation, NO comments outside the code block
+        - Use relative paths from project root
+        - For updates, only show changed functions (git diff style) unless I ask for full file
         """
         
-        // 2. 写入剪贴板
+        pasteboard.clearContents()
+        pasteboard.setString(instruction, forType: .string)
+        showNotification(title: "Instruction Copied", body: "Paste to Gemini Settings > Personal Context")
+        print("📋 Personal Context instruction copied")
+    }
+    
+    /// 日常使用：复制 @code 咒语
+    func copyProtocol() {
+        print("🔗 @code button clicked...")
+        
+        // 🎯 保存当前用户剪贴板
+        if let current = pasteboard.string(forType: .string),
+           !current.contains("cat <<") && !current.contains("EOF") {
+            lastUserClipboard = current
+            lastUserClipboardTime = Date()
+        }
+        
+        // 超级简短！
+        let prompt = "@code"
+        
         pasteboard.clearContents()
         pasteboard.setString(prompt, forType: .string)
-        print("📋 Prompt copied to clipboard (\(prompt.count) chars)")
+        lastChangeCount = pasteboard.changeCount
         
-        // 3. ✨ 触发魔法粘贴 (Magic Paste)
-        print("🎯 Attempting auto-paste...")
-        MagicPaster.shared.pasteToBrowser()
+        showNotification(title: "@code ✓", body: "Paste to Gemini + your request")
+        print("📋 @code copied")
     }
     
     /// Review 最后一次改动（点击 Review 按钮）

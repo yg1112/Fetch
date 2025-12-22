@@ -66,7 +66,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate { // 遵循
         
         if let panel = floatingPanel {
             panel.delegate = self // 监听移动事件
-            panel.level = .floating
+            panel.level = .normal  // 默认不置顶，用户点图钉才置顶
             panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
             panel.backgroundColor = .clear // 完全透明，交给 SwiftUI 渲染背景
             panel.isOpaque = false

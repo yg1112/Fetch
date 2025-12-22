@@ -21,23 +21,31 @@ struct ContentView: View {
                 // === HEADER (Status & Project & Mode) ===
                 VStack(spacing: 12) { // 增加间距
                     HStack(spacing: 12) {
-                        // Status Dot
+                        // Status Dot - 显示监听状态或处理状态
                         Circle()
-                            .fill(logic.isListening ? activeGreen : Color.secondary.opacity(0.5))
-                            .frame(width: 8, height: 8) // 稍微加大一点点
-                            .shadow(color: logic.isListening ? activeGreen.opacity(0.6) : .clear, radius: 4)
+                            .fill(logic.isProcessing ? Color.orange : (logic.isListening ? activeGreen : Color.secondary.opacity(0.5)))
+                            .frame(width: 8, height: 8)
+                            .shadow(color: logic.isProcessing ? Color.orange.opacity(0.8) : (logic.isListening ? activeGreen.opacity(0.6) : .clear), radius: 4)
+                            .animation(logic.isProcessing ? Animation.easeInOut(duration: 0.5).repeatForever(autoreverses: true) : .default, value: logic.isProcessing)
                         
-                        // Project Path (Clickable Text)
-                        Button(action: logic.selectProjectRoot) {
-                            HStack(spacing: 6) {
-                                Image(systemName: "folder.fill")
-                                    .font(.system(size: 11))
-                                Text(logic.projectRoot.isEmpty ? "Select Project..." : URL(fileURLWithPath: logic.projectRoot).lastPathComponent)
-                                    .font(.system(size: 12, weight: .semibold))
+                        // 状态文字：显示处理状态或项目路径
+                        if logic.isProcessing {
+                            Text(logic.processingStatus.isEmpty ? "Processing..." : logic.processingStatus)
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundColor(.orange)
+                        } else {
+                            // Project Path (Clickable Text)
+                            Button(action: logic.selectProjectRoot) {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "folder.fill")
+                                        .font(.system(size: 11))
+                                    Text(logic.projectRoot.isEmpty ? "Select Project..." : URL(fileURLWithPath: logic.projectRoot).lastPathComponent)
+                                        .font(.system(size: 12, weight: .semibold))
+                                }
+                                .foregroundColor(logic.projectRoot.isEmpty ? .secondary : .primary)
                             }
-                            .foregroundColor(logic.projectRoot.isEmpty ? .secondary : .primary)
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
                         
                         Spacer()
                         
@@ -76,11 +84,37 @@ struct ContentView: View {
                 }
                 .padding(16)
                 
+                // === PROCESSING BANNER (显示正在处理代码) ===
+                if logic.isProcessing {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .scaleEffect(0.7)
+                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                        
+                        Text("🔧 Local Editing Active")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(.white)
+                        
+                        Spacer()
+                        
+                        Text(logic.processingStatus)
+                            .font(.system(size: 10))
+                            .foregroundColor(.white.opacity(0.8))
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Color.orange.opacity(0.9))
+                    .cornerRadius(8)
+                    .padding(.horizontal, 12)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .animation(.easeInOut(duration: 0.3), value: logic.isProcessing)
+                }
+                
                 // === BODY (Log Stream) ===
                 // 没有任何背景色，直接显示在毛玻璃上
                 VStack {
                     if logic.changeLogs.isEmpty {
-                        EmptyStateView(isListening: logic.isListening)
+                        EmptyStateView(isListening: logic.isListening, isProcessing: logic.isProcessing)
                     } else {
                         ScrollView {
                             LazyVStack(spacing: 0) {
@@ -92,22 +126,51 @@ struct ContentView: View {
                         }
                     }
                 }
-                .frame(height: 140) // 固定高度
+                .frame(height: logic.isProcessing ? 100 : 140) // 处理时缩小高度给 banner 腾空间
                 
-                // === FOOTER (Two Big Actions) ===
+                // === FOOTER (Three Actions) ===
                 // 无缝分割线
                 Divider()
                     .opacity(0.1)
                 
                 HStack(spacing: 0) {
-                    // LEFT: PAIR
+                    // LEFT: PAIR (点击复制 @code，菜单显示设置选项)
+                    Menu {
+                        Button("📋 Copy @code") {
+                            logic.copyProtocol()
+                        }
+                        Divider()
+                        Button("⚙️ First Time Setup") {
+                            logic.copyGemSetupGuide()
+                        }
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "at")
+                                .font(.system(size: 14, weight: .semibold))
+                            Text("code")
+                                .font(.system(size: 13, weight: .semibold))
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .foregroundColor(activeBlue)
+                        .contentShape(Rectangle())
+                    }
+                    .menuStyle(.borderlessButton)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .help("Copy @code trigger")
+                    
+                    // Vertical Divider
+                    Divider()
+                        .frame(height: 20)
+                        .opacity(0.2)
+                    
+                    // MIDDLE: APPLY (手动应用剪贴板)
                     BigActionButton(
-                        title: "Pair",
-                        icon: "link",
-                        color: activeBlue,
-                        isActive: false
+                        title: "Apply",
+                        icon: "arrow.down.doc.fill",
+                        color: activeGreen,
+                        isActive: logic.isProcessing
                     ) {
-                        logic.copyProtocol()
+                        logic.manualApplyFromClipboard()
                     }
                     
                     // Vertical Divider
@@ -141,10 +204,17 @@ struct ContentView: View {
     private func toggleAlwaysOnTop() {
         isAlwaysOnTop.toggle()
         
-        // 查找当前窗口并设置 level
-        if let window = NSApplication.shared.windows.first(where: { $0.isVisible && !$0.isMiniaturized }) {
-            window.level = isAlwaysOnTop ? .floating : .normal
-            print("🔝 Window level set to: \(isAlwaysOnTop ? "Always On Top" : "Normal")")
+        // 查找 FloatingPanel 窗口并设置 level
+        // 使用 .statusBar 级别确保真正置顶（比 .floating 更高）
+        if let panel = NSApplication.shared.windows.first(where: { $0 is FloatingPanel }) {
+            if isAlwaysOnTop {
+                panel.level = .statusBar  // 最高级别，甚至高于全屏应用
+                panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+            } else {
+                panel.level = .normal
+                panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+            }
+            print("📌 Window level set to: \(isAlwaysOnTop ? "PINNED (statusBar)" : "Normal")")
         }
     }
 }
@@ -153,16 +223,26 @@ struct ContentView: View {
 
 struct EmptyStateView: View {
     let isListening: Bool
+    let isProcessing: Bool
     
     var body: some View {
         VStack(spacing: 12) {
             Spacer()
-            Image(systemName: isListening ? "waveform" : "command")
-                .font(.system(size: 28))
-                .foregroundColor(.secondary.opacity(0.3))
-                .symbolEffect(.pulse, isActive: isListening) // iOS17+/macOS14+ 动画
             
-            Text(isListening ? "Waiting for Gemini..." : "Ready to Link")
+            if isProcessing {
+                Image(systemName: "gearshape.2.fill")
+                    .font(.system(size: 28))
+                    .foregroundColor(.orange.opacity(0.6))
+                    .rotationEffect(.degrees(isProcessing ? 360 : 0))
+                    .animation(Animation.linear(duration: 2).repeatForever(autoreverses: false), value: isProcessing)
+            } else {
+                Image(systemName: isListening ? "waveform" : "command")
+                    .font(.system(size: 28))
+                    .foregroundColor(.secondary.opacity(0.3))
+                    .symbolEffect(.pulse, isActive: isListening) // iOS17+/macOS14+ 动画
+            }
+            
+            Text(isProcessing ? "Applying changes..." : (isListening ? "Waiting for Gemini..." : "Ready to Link"))
                 .font(.system(size: 11, weight: .medium))
                 .foregroundColor(.secondary.opacity(0.5))
             Spacer()

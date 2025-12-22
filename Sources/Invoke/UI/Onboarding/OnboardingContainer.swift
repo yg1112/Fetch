@@ -28,20 +28,21 @@ struct OnboardingContainer: View {
             } else if currentStep == 2 {
                 modeSelectionView
             } else if currentStep == 3 {
-                accessibilityPermissionView  // 独立的 Accessibility 步骤
+                accessibilityPermissionView
             } else if currentStep == 4 {
-                gitPermissionsView           // Git 权限步骤（条件性）
+                gitPermissionsView
             } else if currentStep == 5 {
                 geminiSetupView
             }
         }
         .frame(width: 600, height: 520)
         .background(VisualEffectView(material: .popover, blendingMode: .behindWindow))
-        .cornerRadius(12)
+        .cornerRadius(16)
         .overlay(
-            RoundedRectangle(cornerRadius: 12)
+            RoundedRectangle(cornerRadius: 16)
                 .stroke(Color.white.opacity(0.1), lineWidth: 1)
         )
+        .shadow(color: Color.black.opacity(0.3), radius: 20, x: 0, y: 10)
     }
     
     // MARK: - Step 0: Welcome
@@ -103,7 +104,6 @@ struct OnboardingContainer: View {
             
             Spacer().frame(height: 10)
             
-            // 动画演示区域
             WorkflowAnimationView()
                 .frame(height: 280)
             
@@ -175,7 +175,7 @@ struct OnboardingContainer: View {
             Spacer()
             
             Button(action: {
-                withAnimation { currentStep = 3 }  // 总是先去 Accessibility 步骤
+                withAnimation { currentStep = 3 }
             }) {
                 Text("Continue")
                     .font(.headline)
@@ -198,186 +198,7 @@ struct OnboardingContainer: View {
         .padding()
     }
     
-    // MARK: - Step 3: Permissions
-    var permissionsView: some View {
-        VStack(spacing: 24) {
-            Spacer()
-            
-            Image(systemName: "hand.raised.square.fill")
-                .resizable()
-                .aspectRatio(contentMode: .fit)
-                .frame(width: 70, height: 70)
-                .foregroundColor(.orange)
-            
-            VStack(spacing: 8) {
-                Text("Git Access Required")
-                    .font(.title2)
-                    .fontWeight(.bold)
-                
-                Text("Mode: \(selectedMode.rawValue)")
-                    .font(.callout)
-                    .foregroundColor(.blue)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 4)
-                    .background(Color.blue.opacity(0.1))
-                    .cornerRadius(8)
-                
-                Text("Invoke needs accessibility permission to auto-paste in browser")
-                    .multilineTextAlignment(.center)
-                    .font(.callout)
-                    .foregroundColor(.secondary)
-                    .padding(.horizontal)
-            }
-            
-            VStack(alignment: .leading, spacing: 16) {
-                PermissionRow(
-                    icon: "keyboard",
-                    title: "Accessibility Access",
-                    description: "Required to auto-paste code in browser",
-                    isGranted: permissions.accessibilityPermission.isGranted
-                )
-            }
-            .padding()
-            .background(Color.black.opacity(0.1))
-            .cornerRadius(12)
-            .padding(.horizontal)
-            
-            Spacer()
-            
-            if permissions.accessibilityPermission.isGranted {
-                Button(action: {
-                    withAnimation { currentStep = 4 }
-                }) {
-                    HStack {
-                        Text("Continue")
-                        Image(systemName: "arrow.right")
-                    }
-                    .font(.headline)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 10)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(.green)
-                .controlSize(.large)
-                .padding(.horizontal, 60)
-            } else {
-                Button(action: {
-                    permissions.requestAccessibilityPermission()
-                }) {
-                    Text("Grant Access")
-                        .font(.headline)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 10)
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                .padding(.horizontal, 60)
-                
-                Text("Will open System Settings")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-            }
-            
-            Button(action: { withAnimation { currentStep = 2 } }) {
-                Text("Back")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-            .buttonStyle(.plain)
-            
-            Spacer().frame(height: 20)
-        }
-        .padding()
-        .onAppear {
-            permissions.checkAccessibilityPermission()
-        }
-    }
-    
-    // MARK: - Step 4: Gemini Setup
-    var geminiSetupView: some View {
-        VStack(spacing: 24) {
-            Spacer()
-            
-            HStack(spacing: 20) {
-                Image(systemName: "sparkles")
-                    .font(.system(size: 50))
-                    .foregroundColor(.purple)
-                
-                Image(systemName: "arrow.right")
-                    .font(.system(size: 30))
-                    .foregroundColor(.secondary)
-                
-                Image(systemName: "link")
-                    .font(.system(size: 50))
-                    .foregroundColor(.blue)
-            }
-            
-            VStack(spacing: 8) {
-                Text("One More Thing")
-                    .font(.title2)
-                    .fontWeight(.bold)
-                
-                Text("Connect Gemini with your repository")
-                    .font(.callout)
-                    .foregroundColor(.secondary)
-            }
-            
-            VStack(alignment: .leading, spacing: 12) {
-                InstructionRow(number: "1", text: "Open gemini.google.com")
-                InstructionRow(number: "2", text: "Start a new conversation")
-                InstructionRow(number: "3", text: "Click the attachment icon (📎)")
-                InstructionRow(number: "4", text: "Select 'Add GitHub repository'")
-                InstructionRow(number: "5", text: "Connect your project repository")
-            }
-            .padding()
-            .background(Color.black.opacity(0.05))
-            .cornerRadius(12)
-            .padding(.horizontal)
-            
-            Text("✨ This allows Gemini to see your latest code changes automatically")
-                .font(.caption)
-                .foregroundColor(.green)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal)
-            
-            Spacer()
-            
-            Button(action: {
-                // 保存选择的模式
-                UserDefaults.standard.set(selectedMode.rawValue, forKey: "GitMode")
-                hasCompletedOnboarding = true
-                
-                // 关闭 onboarding window 并显示主面板
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                    closeOnboarding()
-                }
-            }) {
-                HStack {
-                    Text("Start Coding")
-                    Image(systemName: "arrow.right.circle.fill")
-                }
-                .font(.headline)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(.green)
-            .controlSize(.large)
-            .padding(.horizontal, 60)
-            
-            Button(action: { withAnimation { currentStep = selectedMode == .localOnly ? 3 : 4 } }) {
-                Text("Back")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-            .buttonStyle(.plain)
-            
-            Spacer().frame(height: 10)
-        }
-        .padding()
-    }
-    
-    // MARK: - Step 3: Accessibility Permission (Required for All)
+    // MARK: - Step 3: Accessibility Permission
     var accessibilityPermissionView: some View {
         VStack(spacing: 24) {
             Spacer()
@@ -458,7 +279,6 @@ struct OnboardingContainer: View {
             } else {
                 Button(action: {
                     permissions.requestAccessibilityPermission()
-                    // 给用户一点时间去设置权限
                     DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                         permissions.checkAccessibilityPermission()
                     }
@@ -493,12 +313,11 @@ struct OnboardingContainer: View {
         }
         .padding()
         .onAppear {
-            // 每次显示时检查权限状态
             permissions.checkAccessibilityPermission()
         }
     }
     
-    // MARK: - Step 4: Git Permissions (Conditional)
+    // MARK: - Step 4: Git Permissions
     var gitPermissionsView: some View {
         VStack(spacing: 24) {
             Spacer()
@@ -590,5 +409,129 @@ struct OnboardingContainer: View {
             Spacer().frame(height: 10)
         }
         .padding()
+    }
+    
+    // MARK: - Step 5: Gemini Setup (Redesigned & Premium)
+    var geminiSetupView: some View {
+        VStack(spacing: 0) {
+            // Header Section
+            VStack(spacing: 16) {
+                // Icons connection animation
+                HStack(spacing: 16) {
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 36))
+                        .foregroundStyle(
+                            LinearGradient(
+                                colors: [.purple, .blue],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                        .symbolEffect(.bounce, options: .nonRepeating)
+                    
+                    Image(systemName: "arrow.right")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundColor(.secondary.opacity(0.3))
+                    
+                    Image(systemName: "link.circle.fill")
+                        .font(.system(size: 36))
+                        .foregroundStyle(
+                            LinearGradient(
+                                colors: [.blue, .cyan],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                }
+                .padding(.top, 40)
+                
+                VStack(spacing: 8) {
+                    Text("Final Step")
+                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                        .foregroundColor(.secondary)
+                        .tracking(1.5)
+                        .textCase(.uppercase)
+                    
+                    Text("Connect Repository")
+                        .font(.system(size: 28, weight: .bold, design: .rounded))
+                        .foregroundColor(.primary)
+                }
+            }
+            
+            Spacer()
+            
+            // Instructions List - Clean Design without cards
+            VStack(alignment: .leading, spacing: 24) {
+                stepRow(num: 1, text: "Open **gemini.google.com**")
+                stepRow(num: 2, text: "Start a new conversation")
+                stepRow(num: 3, text: "Click the **Attachment (📎)** icon")
+                stepRow(num: 4, text: "Select **'Add GitHub repository'**")
+                stepRow(num: 5, text: "Connect your project repository")
+            }
+            .padding(.horizontal, 40)
+            
+            Spacer()
+            
+            // Footer Info
+            HStack(spacing: 6) {
+                Image(systemName: "magic")
+                    .font(.caption)
+                Text("Enables real-time code context access")
+                    .font(.caption)
+            }
+            .foregroundColor(.secondary)
+            .padding(.bottom, 20)
+            
+            // Action Button
+            Button(action: {
+                UserDefaults.standard.set(selectedMode.rawValue, forKey: "GitMode")
+                hasCompletedOnboarding = true
+                
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    closeOnboarding()
+                }
+            }) {
+                HStack {
+                    Text("Start Coding")
+                        .fontWeight(.bold)
+                    Image(systemName: "arrow.right")
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 16)
+                .background(
+                    LinearGradient(
+                        colors: [Color(red: 0.2, green: 0.8, blue: 0.5), Color(red: 0.1, green: 0.7, blue: 0.4)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+                .foregroundColor(.white)
+                .cornerRadius(14)
+                .shadow(color: Color.green.opacity(0.3), radius: 10, y: 5)
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 40)
+            .padding(.bottom, 40)
+        }
+    }
+    
+    // Helper View Builder for Clean Steps
+    private func stepRow(num: Int, text: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 16) {
+            Text("\(num)")
+                .font(.system(size: 12, weight: .bold, design: .rounded))
+                .foregroundColor(.white)
+                .frame(width: 24, height: 24)
+                .background(Circle().fill(Color.blue.opacity(0.8)))
+                .shadow(color: .blue.opacity(0.3), radius: 4, y: 2)
+            
+            Text(.init(text)) // Init with Markdown for bold support
+                .font(.system(size: 15, weight: .medium, design: .default))
+                .foregroundColor(.primary.opacity(0.85))
+                .fixedSize(horizontal: false, vertical: true) // Prevents truncation
+                .lineLimit(nil)
+            
+            Spacer()
+        }
     }
 }
