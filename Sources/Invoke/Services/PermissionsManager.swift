@@ -46,7 +46,10 @@ class PermissionsManager: ObservableObject {
     
     // MARK: - Accessibility
     func checkAccessibilityPermission() {
-        accessibilityPermission = AXIsProcessTrusted() ? .granted : .denied
+        let isGranted = AXIsProcessTrusted()
+        DispatchQueue.main.async {
+            self.accessibilityPermission = isGranted ? .granted : .denied
+        }
     }
     
     func requestAccessibilityPermission() {

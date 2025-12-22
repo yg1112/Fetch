@@ -4,37 +4,31 @@ import AppKit
 class MagicPaster {
     static let shared = MagicPaster()
     
-    // 默认浏览器，稍后可以在 UI 里做成设置项
-    var targetBrowser: String = "Google Chrome"
-    
     func pasteToBrowser() {
-        print("🎯 MagicPaster: Attempting to paste to \(targetBrowser)...")
+        print("🎯 MagicPaster: Executing Universal Paste...")
         
-        // 检测浏览器是否在运行
-        let runningApps = NSWorkspace.shared.runningApplications
-        let isBrowserRunning = runningApps.contains { $0.localizedName == targetBrowser }
-        
-        if !isBrowserRunning {
-            print("⚠️ Warning: \(targetBrowser) is not running")
+        // 1. 隐藏 Invoke 自身
+        // 这会让焦点自动回到用户刚才使用的窗口（即浏览器）
+        DispatchQueue.main.async {
+            NSApp.hide(nil)
         }
         
-        let scriptSource = """
-        tell application "\(targetBrowser)"
-            activate
-        end tell
-        delay 0.5
-        tell application "System Events"
-            keystroke "v" using {command down}
-        end tell
-        """
-        
-        var error: NSDictionary?
-        if let scriptObject = NSAppleScript(source: scriptSource) {
-            _ = scriptObject.executeAndReturnError(&error)
-            if let error = error {
-                print("❌ MagicPaste Error: \(error)")
-            } else {
-                print("✅ MagicPaster: Paste command sent successfully")
+        // 2. 稍作延迟，等待窗口切换完成，然后发送 Cmd+V
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            let scriptSource = """
+            tell application "System Events"
+                keystroke "v" using {command down}
+            end tell
+            """
+            
+            var error: NSDictionary?
+            if let scriptObject = NSAppleScript(source: scriptSource) {
+                _ = scriptObject.executeAndReturnError(&error)
+                if let error = error {
+                    print("❌ MagicPaste Error: \(error)")
+                } else {
+                    print("✅ MagicPaster: Paste command sent to frontmost app")
+                }
             }
         }
     }

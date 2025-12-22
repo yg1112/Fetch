@@ -1,10 +1,23 @@
 import SwiftUI
 
+// Environment key for closing onboarding
+struct CloseOnboardingKey: EnvironmentKey {
+    static let defaultValue: () -> Void = {}
+}
+
+extension EnvironmentValues {
+    var closeOnboarding: () -> Void {
+        get { self[CloseOnboardingKey.self] }
+        set { self[CloseOnboardingKey.self] = newValue }
+    }
+}
+
 struct OnboardingContainer: View {
     @AppStorage("hasCompletedOnboarding") var hasCompletedOnboarding: Bool = false
     @StateObject private var permissions = PermissionsManager.shared
     @State private var currentStep = 0
     @State private var selectedMode: GeminiLinkLogic.GitMode = .localOnly
+    @Environment(\.closeOnboarding) var closeOnboarding
     
     var body: some View {
         VStack {
@@ -15,8 +28,10 @@ struct OnboardingContainer: View {
             } else if currentStep == 2 {
                 modeSelectionView
             } else if currentStep == 3 {
-                permissionsView
+                accessibilityPermissionView  // 独立的 Accessibility 步骤
             } else if currentStep == 4 {
+                gitPermissionsView           // Git 权限步骤（条件性）
+            } else if currentStep == 5 {
                 geminiSetupView
             }
         }
@@ -160,7 +175,7 @@ struct OnboardingContainer: View {
             Spacer()
             
             Button(action: {
-                withAnimation { currentStep = selectedMode == .localOnly ? 4 : 3 }
+                withAnimation { currentStep = 3 }  // 总是先去 Accessibility 步骤
             }) {
                 Text("Continue")
                     .font(.headline)
@@ -330,8 +345,11 @@ struct OnboardingContainer: View {
             Button(action: {
                 // 保存选择的模式
                 UserDefaults.standard.set(selectedMode.rawValue, forKey: "GitMode")
-                withAnimation {
-                    hasCompletedOnboarding = true
+                hasCompletedOnboarding = true
+                
+                // 关闭 onboarding window 并显示主面板
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    closeOnboarding()
                 }
             }) {
                 HStack {
@@ -347,7 +365,222 @@ struct OnboardingContainer: View {
             .controlSize(.large)
             .padding(.horizontal, 60)
             
-            Button(action: { withAnimation { currentStep = selectedMode == .localOnly ? 2 : 3 } }) {
+            Button(action: { withAnimation { currentStep = selectedMode == .localOnly ? 3 : 4 } }) {
+                Text("Back")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            .buttonStyle(.plain)
+            
+            Spacer().frame(height: 10)
+        }
+        .padding()
+    }
+    
+    // MARK: - Step 3: Accessibility Permission (Required for All)
+    var accessibilityPermissionView: some View {
+        VStack(spacing: 24) {
+            Spacer()
+            
+            Image(systemName: "hand.raised.fill")
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(width: 70, height: 70)
+                .foregroundStyle(
+                    LinearGradient(
+                        colors: [.orange, .red],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .symbolEffect(.bounce, value: permissions.accessibilityPermission.isGranted)
+            
+            VStack(spacing: 8) {
+                Text("Accessibility Required")
+                    .font(.title2)
+                    .fontWeight(.bold)
+                
+                Text("Essential for auto-paste functionality")
+                    .multilineTextAlignment(.center)
+                    .font(.callout)
+                    .foregroundColor(.secondary)
+                    .padding(.horizontal)
+            }
+            
+            VStack(alignment: .leading, spacing: 16) {
+                HStack(spacing: 12) {
+                    Image(systemName: permissions.accessibilityPermission.isGranted ? "checkmark.circle.fill" : "keyboard")
+                        .font(.title2)
+                        .foregroundColor(permissions.accessibilityPermission.isGranted ? .green : .orange)
+                    
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Accessibility Permission")
+                            .fontWeight(.semibold)
+                        Text("Allows Invoke to auto-paste code into browser")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    
+                    Spacer()
+                    
+                    if permissions.accessibilityPermission.isGranted {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundColor(.green)
+                            .font(.title2)
+                    }
+                }
+            }
+            .padding()
+            .background(Color.black.opacity(0.1))
+            .cornerRadius(12)
+            .padding(.horizontal)
+            
+            Spacer()
+            
+            if permissions.accessibilityPermission.isGranted {
+                Button(action: {
+                    withAnimation { 
+                        currentStep = selectedMode.needsGitPermission ? 4 : 5 
+                    }
+                }) {
+                    HStack {
+                        Text("Continue")
+                        Image(systemName: "arrow.right")
+                    }
+                    .font(.headline)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.green)
+                .controlSize(.large)
+                .padding(.horizontal, 60)
+            } else {
+                Button(action: {
+                    permissions.requestAccessibilityPermission()
+                    // 给用户一点时间去设置权限
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                        permissions.checkAccessibilityPermission()
+                    }
+                }) {
+                    HStack {
+                        Image(systemName: "gear")
+                        Text("Grant Access")
+                    }
+                    .font(.headline)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .padding(.horizontal, 60)
+                
+                Text("Will open System Settings → Privacy & Security → Accessibility")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
+            }
+            
+            Button(action: { withAnimation { currentStep = 2 } }) {
+                Text("Back")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            .buttonStyle(.plain)
+            
+            Spacer().frame(height: 10)
+        }
+        .padding()
+        .onAppear {
+            // 每次显示时检查权限状态
+            permissions.checkAccessibilityPermission()
+        }
+    }
+    
+    // MARK: - Step 4: Git Permissions (Conditional)
+    var gitPermissionsView: some View {
+        VStack(spacing: 24) {
+            Spacer()
+            
+            Image(systemName: "key.fill")
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(width: 70, height: 70)
+                .foregroundStyle(
+                    LinearGradient(
+                        colors: [.blue, .purple],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+            
+            VStack(spacing: 8) {
+                Text("Git Access Required")
+                    .font(.title2)
+                    .fontWeight(.bold)
+                
+                Text("Mode: \(selectedMode.rawValue)")
+                    .font(.callout)
+                    .foregroundColor(.blue)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 4)
+                    .background(Color.blue.opacity(0.1))
+                    .cornerRadius(8)
+                
+                Text("Your selected mode requires Git credentials to push changes")
+                    .multilineTextAlignment(.center)
+                    .font(.callout)
+                    .foregroundColor(.secondary)
+                    .padding(.horizontal)
+            }
+            
+            VStack(alignment: .leading, spacing: 16) {
+                HStack(spacing: 12) {
+                    Image(systemName: "lock.shield")
+                        .font(.title2)
+                        .foregroundColor(.blue)
+                    
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("GitHub/GitLab Credentials")
+                            .fontWeight(.semibold)
+                        Text("Required for push operations (\(selectedMode.description))")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    
+                    Spacer()
+                }
+            }
+            .padding()
+            .background(Color.black.opacity(0.1))
+            .cornerRadius(12)
+            .padding(.horizontal)
+            
+            Text("Git credentials will be requested when you first push changes.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal)
+            
+            Spacer()
+            
+            Button(action: {
+                withAnimation { currentStep = 5 }
+            }) {
+                HStack {
+                    Text("Continue")
+                    Image(systemName: "arrow.right")
+                }
+                .font(.headline)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .padding(.horizontal, 60)
+            
+            Button(action: { withAnimation { currentStep = 3 } }) {
                 Text("Back")
                     .font(.caption)
                     .foregroundColor(.secondary)

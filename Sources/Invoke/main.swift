@@ -6,6 +6,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate { // 遵循
     var statusItem: NSStatusItem?
     var floatingPanel: FloatingPanel?
     var settingsWindow: NSWindow?
+    var onboardingWindow: NSWindow?
     
     // 用 UserDefaults 存储窗口坐标
     let posKeyX = "WindowPosX"
@@ -17,8 +18,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate { // 遵循
         // 1. 设置菜单栏
         setupMenuBarIcon()
         
-        // 2. 启动核心面板
-        setupFloatingPanel()
+        // 2. 检查是否需要显示 onboarding
+        let hasCompletedOnboarding = UserDefaults.standard.bool(forKey: "hasCompletedOnboarding")
+        if !hasCompletedOnboarding {
+            print("🎬 [APP] First run - showing onboarding")
+            showOnboarding()
+        } else {
+            print("✅ [APP] Onboarding completed - showing main panel")
+            setupFloatingPanel()
+        }
     }
     
     private func setupMenuBarIcon() {
@@ -102,6 +110,31 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate { // 遵循
     
     @objc func showSettings() {
         // (Settings Window Logic - 保持不变)
+    }
+    
+    private func showOnboarding() {
+        let onboardingView = OnboardingContainer()
+            .environment(\.closeOnboarding, { [weak self] in
+                print("✅ [APP] Onboarding completed")
+                self?.onboardingWindow?.close()
+                self?.onboardingWindow = nil
+                self?.setupFloatingPanel()
+            })
+        
+        onboardingWindow = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 600, height: 520),
+            styleMask: [.titled, .closable, .fullSizeContentView],
+            backing: .buffered,
+            defer: false
+        )
+        
+        onboardingWindow?.center()
+        onboardingWindow?.isReleasedWhenClosed = false
+        onboardingWindow?.titlebarAppearsTransparent = true
+        onboardingWindow?.titleVisibility = .hidden
+        onboardingWindow?.contentView = NSHostingView(rootView: onboardingView)
+        onboardingWindow?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 }
 

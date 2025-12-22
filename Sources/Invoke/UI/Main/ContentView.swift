@@ -18,59 +18,51 @@ struct ContentView: View {
             VStack(spacing: 0) {
                 
                 // === HEADER (Status & Project & Mode) ===
-                VStack(spacing: 8) {
+                VStack(spacing: 12) { // 增加间距
                     HStack(spacing: 12) {
                         // Status Dot
                         Circle()
                             .fill(logic.isListening ? activeGreen : Color.secondary.opacity(0.5))
-                            .frame(width: 6, height: 6)
+                            .frame(width: 8, height: 8) // 稍微加大一点点
                             .shadow(color: logic.isListening ? activeGreen.opacity(0.6) : .clear, radius: 4)
                         
                         // Project Path (Clickable Text)
                         Button(action: logic.selectProjectRoot) {
-                            HStack(spacing: 4) {
-                                Image(systemName: "folder")
-                                    .font(.system(size: 10, weight: .bold))
+                            HStack(spacing: 6) {
+                                Image(systemName: "folder.fill")
+                                    .font(.system(size: 11))
                                 Text(logic.projectRoot.isEmpty ? "Select Project..." : URL(fileURLWithPath: logic.projectRoot).lastPathComponent)
-                                    .font(.system(size: 11, weight: .medium))
+                                    .font(.system(size: 12, weight: .semibold))
                             }
-                            .foregroundColor(.secondary)
+                            .foregroundColor(logic.projectRoot.isEmpty ? .secondary : .primary)
                         }
                         .buttonStyle(.plain)
                         
                         Spacer()
                         
-                        // Close Button (Ghost Style)
+                        // Close Button
                         Button(action: { NSApplication.shared.terminate(nil) }) {
                             Image(systemName: "xmark")
                                 .font(.system(size: 10, weight: .bold))
                                 .foregroundColor(.secondary.opacity(0.5))
+                                .frame(width: 20, height: 20)
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        .padding(.trailing, 4)
                     }
                     
-                    // Mode Selector
-                    HStack(spacing: 8) {
-                        Text("Mode:")
-                            .font(.system(size: 9))
-                            .foregroundColor(.secondary)
-                        
-                        Picker("", selection: $logic.gitMode) {
-                            ForEach(GeminiLinkLogic.GitMode.allCases, id: \.self) { mode in
-                                Text(mode.rawValue).tag(mode)
-                            }
+                    // Mode Selector (UI 修复版)
+                    Picker("", selection: $logic.gitMode) {
+                        ForEach(GeminiLinkLogic.GitMode.allCases, id: \.self) { mode in
+                            Text(mode.rawValue).tag(mode)
                         }
-                        .pickerStyle(.segmented)
-                        .frame(width: 140)
-                        
-                        Spacer()
                     }
+                    .pickerStyle(.segmented)
+                    .labelsHidden() // 隐藏默认标签
+                    .frame(maxWidth: .infinity) // 撑满宽度
+                    .padding(.horizontal, 4) // 微调边距
                 }
-                .padding(.horizontal, 16)
-                .padding(.top, 14)
-                .padding(.bottom, 10)
+                .padding(16)
                 
                 // === BODY (Log Stream) ===
                 // 没有任何背景色，直接显示在毛玻璃上
@@ -122,16 +114,15 @@ struct ContentView: View {
                     }
                 }
                 .frame(height: 50)
-                .background(Color.black.opacity(0.2)) // 底部稍微深一点，增加稳重感
+                .background(Color.black.opacity(0.2))
             }
         }
-        .cornerRadius(16) // 统一的大圆角
-        // 加上极细的边框，提升精致感
+        .cornerRadius(16)
         .overlay(
             RoundedRectangle(cornerRadius: 16)
                 .stroke(Color.white.opacity(0.1), lineWidth: 0.5)
         )
-        .frame(width: 300) // 紧凑宽度
+        .frame(width: 320) // 稍微加宽一点，让 Safe/Local Only 文字能放下
     }
 }
 
