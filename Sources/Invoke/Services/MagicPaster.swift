@@ -8,21 +8,33 @@ class MagicPaster {
     var targetBrowser: String = "Google Chrome"
     
     func pasteToBrowser() {
+        print("🎯 MagicPaster: Attempting to paste to \(targetBrowser)...")
+        
+        // 检测浏览器是否在运行
+        let runningApps = NSWorkspace.shared.runningApplications
+        let isBrowserRunning = runningApps.contains { $0.localizedName == targetBrowser }
+        
+        if !isBrowserRunning {
+            print("⚠️ Warning: \(targetBrowser) is not running")
+        }
+        
         let scriptSource = """
-        tell application "\(targetBrowser)" to activate
-        delay 0.2
+        tell application "\(targetBrowser)"
+            activate
+        end tell
+        delay 0.5
         tell application "System Events"
             keystroke "v" using {command down}
-            delay 0.2
-            keystroke return
         end tell
         """
         
         var error: NSDictionary?
         if let scriptObject = NSAppleScript(source: scriptSource) {
-            scriptObject.executeAndReturnError(&error)
+            _ = scriptObject.executeAndReturnError(&error)
             if let error = error {
-                print("MagicPaste Error: \(error)")
+                print("❌ MagicPaste Error: \(error)")
+            } else {
+                print("✅ MagicPaster: Paste command sent successfully")
             }
         }
     }

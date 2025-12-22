@@ -27,6 +27,8 @@ class GeminiLinkLogic: ObservableObject {
     private var timer: Timer?
     private let pasteboard = NSPasteboard.general
     private var lastChangeCount: Int = 0
+    
+    // Protocol Markers
     private let markerStart = "!!!B64_START!!!"
     private let markerEnd = "!!!B64_END!!!"
     
@@ -34,62 +36,44 @@ class GeminiLinkLogic: ObservableObject {
         if !projectRoot.isEmpty { loadLogs() }
     }
     
-    // MARK: - File Selection
+    // MARK: - File Selection (Fixed & Async)
     func selectProjectRoot() {
-        // Run on main thread
-        guard Thread.isMainThread else {
-            DispatchQueue.main.async { [weak self] in
-                self?.selectProjectRoot()
+        DispatchQueue.main.async {
+            let panel = NSOpenPanel()
+            panel.canChooseFiles = false
+            panel.canChooseDirectories = true
+            panel.allowsMultipleSelection = false
+            panel.prompt = "Select Root"
+            panel.directoryURL = FileManager.default.homeDirectoryForCurrentUser
+            
+            NSApp.activate(ignoringOtherApps: true)
+            
+            panel.begin { response in
+                if response == .OK, let url = panel.url {
+                    DispatchQueue.main.async {
+                        self.projectRoot = url.path
+                        print("📂 Project Root Set: \(self.projectRoot)")
+                    }
+                }
             }
-            return
-        }
-        
-        let panel = NSOpenPanel()
-        
-        // Basic configuration
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
-        panel.allowsMultipleSelection = false
-        panel.canCreateDirectories = false
-        panel.showsHiddenFiles = false
-        
-        // Important: Allow selecting packages as directories (like .app bundles)
-        panel.treatsFilePackagesAsDirectories = true
-        
-        // Set user-friendly labels
-        panel.message = "Choose a project folder to monitor for Git changes"
-        panel.prompt = "Select"
-        panel.title = "Select Project Folder"
-        
-        // Don't restrict to specific file types - allow all directories
-        panel.allowsOtherFileTypes = true
-        
-        // Activate app to bring panel to front
-        NSApp.activate(ignoringOtherApps: true)
-        
-        // Use runModal for synchronous behavior - reliable for .app bundles
-        let response = panel.runModal()
-        
-        // Process response
-        if response == .OK, let url = panel.url {
-            self.projectRoot = url.path
-            print("📂 Project root selected: \(url.lastPathComponent)")
-        } else {
-            print("📂 Project selection cancelled")
         }
     }
 
-    // MARK: - Core Flow
+    // MARK: - Core Flow (Sync)
     func toggleListening() {
         isListening.toggle()
         if isListening {
+            print("👂 Listen mode ACTIVATED - monitoring clipboard...")
             lastChangeCount = pasteboard.changeCount
             timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
                 self?.checkClipboard()
             }
+            showNotification(title: "Sync Started", body: "Monitoring clipboard for changes")
         } else {
+            print("🛑 Listen mode DEACTIVATED")
             timer?.invalidate()
             timer = nil
+            showNotification(title: "Sync Stopped", body: "No longer monitoring clipboard")
         }
     }
     
@@ -97,10 +81,14 @@ class GeminiLinkLogic: ObservableObject {
         guard pasteboard.changeCount != lastChangeCount else { return }
         lastChangeCount = pasteboard.changeCount
         
-        guard let content = pasteboard.string(forType: .string),
-              content.contains(markerStart) else { return }
+        guard let content = pasteboard.string(forType: .string) else { return }
         
-        processClipboardContent(content)
+        // 检测到剪贴板变化
+        if content.contains(markerStart) {
+            print("🔍 Detected Base64 protocol in clipboard!")
+            showNotification(title: "Code Detected", body: "Processing changes...")
+            processClipboardContent(content)
+        }
     }
     
     private func processClipboardContent(_ rawText: String) {
@@ -110,8 +98,12 @@ class GeminiLinkLogic: ObservableObject {
         )
         let matches = pattern.matches(in: rawText, options: [], range: NSRange(rawText.startIndex..<rawText.endIndex, in: rawText))
         
-        if matches.isEmpty { return }
+        if matches.isEmpty {
+            print("⚠️ No valid Base64 blocks found in clipboard")
+            return
+        }
         
+        print("✅ Found \(matches.count) file(s) to update")
         var updatedFiles: [String] = []
         
         for match in matches {
@@ -133,45 +125,59 @@ class GeminiLinkLogic: ObservableObject {
     }
     
     private func writeToFile(relativePath: String, base64Content: String) -> Bool {
-        guard let data = Data(base64Encoded: base64Content) else { return false }
+        guard let data = Data(base64Encoded: base64Content) else {
+            print("❌ Invalid Base64 for: \(relativePath)")
+            return false
+        }
         let fullURL = URL(fileURLWithPath: projectRoot).appendingPathComponent(relativePath)
         do {
             try FileManager.default.createDirectory(at: fullURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             try data.write(to: fullURL)
+            print("✅ Wrote: \(relativePath)")
             return true
         } catch {
-            print("Write error: \(error)")
+            print("❌ Write error: \(error)")
             return false
         }
     }
     
-    // MARK: - Git & Logging Logic
     private func autoCommitAndPush(message: String, summary: String) {
+        print("🚀 Starting Git commit & push...")
         DispatchQueue.global(qos: .userInitiated).async {
             do {
                 _ = try GitService.shared.pushChanges(in: self.projectRoot, message: message)
-                
-                // Try to get hash, fallback to "unknown" if fails
                 let commitHash = (try? GitService.shared.run(args: ["rev-parse", "--short", "HEAD"], in: self.projectRoot)) ?? "unknown"
+                
+                print("✅ Git push successful: \(commitHash)")
                 
                 DispatchQueue.main.async {
                     let newLog = ChangeLog(commitHash: commitHash, timestamp: Date(), summary: summary)
                     self.changeLogs.insert(newLog, at: 0)
                     self.saveLogs()
+                    self.showNotification(title: "Sync Complete", body: summary)
                     NSSound(named: "Glass")?.play()
                 }
             } catch {
-                print("Git Error: \(error)")
+                print("❌ Git Error: \(error)")
+                DispatchQueue.main.async {
+                    self.showNotification(title: "Sync Failed", body: error.localizedDescription)
+                }
             }
         }
     }
     
-    // MARK: - Protocol & Validation
+    // MARK: - Protocol & Validation (The Brain)
+    
     func copyProtocol() {
-        let structure = "(Project structure omitted)"
+        print("🔗 Pair button clicked - preparing protocol...")
+        
+        // 1. 生成真实的项目结构 (Real Context Injection)
+        let structure = scanProjectStructure()
+        print("📂 Project structure scanned: \(structure.split(separator: "\n").count) lines")
+        
         let prompt = """
         You are my Senior AI Pair Programmer.
-        Current Project Structure:
+        Current Project Context:
         \(structure)
 
         【PROTOCOL - STRICTLY ENFORCE】:
@@ -190,8 +196,22 @@ class GeminiLinkLogic: ObservableObject {
         Ready? Await my instructions.
         """
         
+        // 2. 写入剪贴板
         pasteboard.clearContents()
         pasteboard.setString(prompt, forType: .string)
+        print("📋 Prompt copied to clipboard (\(prompt.count) chars)")
+        
+        // 3. ✨ 触发魔法粘贴 (Magic Paste)
+        // 检查辅助功能权限
+        let hasPermission = AXIsProcessTrusted()
+        if hasPermission {
+            print("🎯 Calling MagicPaster...")
+            MagicPaster.shared.pasteToBrowser()
+        } else {
+            print("⚠️ Accessibility permission not granted! Cannot auto-paste.")
+            print("   User needs to manually paste (Cmd+V) in browser")
+            showNotification(title: "Manual Paste Required", body: "Press Cmd+V in Gemini to paste the protocol")
+        }
     }
     
     func validateCommit(_ log: ChangeLog) {
@@ -200,20 +220,22 @@ class GeminiLinkLogic: ObservableObject {
             
             let prompt = """
             Please VALIDATE this specific commit: \(log.commitHash).
-            
-            I have just applied these changes locally. Here is the `git show` output:
+            Here is the `git show` output:
             
             \(diff ?? "Error reading diff")
             
             Task:
-            1. Review the code changes for logic errors or bugs.
-            2. If CORRECT, reply: "Commit \(log.commitHash) Verified: [Short Summary]"
-            3. If WRONG, output the FIX using the Base64 Protocol immediately.
+            1. Review logic errors.
+            2. If CORRECT, reply: "Verified".
+            3. If WRONG, output the FIX using the Base64 Protocol.
             """
             
             DispatchQueue.main.async {
                 self.pasteboard.clearContents()
                 self.pasteboard.setString(prompt, forType: .string)
+                
+                // 同样触发自动粘贴
+                MagicPaster.shared.pasteToBrowser()
             }
         }
     }
@@ -223,6 +245,52 @@ class GeminiLinkLogic: ObservableObject {
             changeLogs[index].isValidated.toggle()
             saveLogs()
         }
+    }
+    
+    // MARK: - Helper: File Scanner
+    private func scanProjectStructure() -> String {
+        guard !projectRoot.isEmpty else { return "(No project selected)" }
+        let rootURL = URL(fileURLWithPath: projectRoot)
+        var output = ""
+        
+        let fileManager = FileManager.default
+        let options: FileManager.DirectoryEnumerationOptions = [.skipsHiddenFiles, .skipsPackageDescendants]
+        
+        // 使用 Enumerator 进行递归扫描
+        if let enumerator = fileManager.enumerator(at: rootURL, includingPropertiesForKeys: [.isDirectoryKey], options: options) {
+            for case let fileURL as URL in enumerator {
+                let relativePath = fileURL.path.replacingOccurrences(of: rootURL.path + "/", with: "")
+                
+                // 🛡️ 智能过滤 (Smart Filter) - 关键！
+                // 忽略垃圾文件，防止 Context 爆炸
+                if relativePath.contains("node_modules") ||
+                   relativePath.contains(".git") ||
+                   relativePath.contains("build") ||
+                   relativePath.contains(".DS_Store") ||
+                   relativePath.hasSuffix(".lock") {
+                    enumerator.skipDescendants() // 跳过该目录的内容
+                    continue
+                }
+                
+                output += "- \(relativePath)\n"
+                
+                // 简单限制一下长度，防止超大项目卡死
+                if output.count > 10000 {
+                    output += "... (truncated)\n"
+                    break
+                }
+            }
+        }
+        return output.isEmpty ? "(Empty Project)" : output
+    }
+    
+    // MARK: - Notification Helper
+    private func showNotification(title: String, body: String) {
+        let notification = NSUserNotification()
+        notification.title = title
+        notification.informativeText = body
+        notification.soundName = nil // 已经有 Glass 音效了
+        NSUserNotificationCenter.default.deliver(notification)
     }
     
     // MARK: - Persistence
