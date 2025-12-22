@@ -28,6 +28,10 @@
     <string>Invoke may need microphone access for certain features.</string>
     <key>NSAppleEventsUsageDescription</key>
     <string>Invoke needs permission to interact with other applications.</string>
+    <key>NSDocumentsFolderUsageDescription</key>
+    <string>Invoke needs access to your documents to select and manage project folders.</string>
+    <key>NSDesktopFolderUsageDescription</key>
+    <string>Invoke needs access to your desktop to select and manage project folders.</string>
     <key>SUFeedURL</key>
     <string>https://yg1112.github.io/invoke/appcast.xml</string>
     <key>SUPublicEDKey</key>
