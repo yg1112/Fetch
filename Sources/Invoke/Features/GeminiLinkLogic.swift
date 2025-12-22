@@ -34,22 +34,31 @@ class GeminiLinkLogic: ObservableObject {
         if !projectRoot.isEmpty { loadLogs() }
     }
     
-    // MARK: - File Selection (Fixed & Stable)
+    // MARK: - File Selection (Async Fix)
     func selectProjectRoot() {
+        // Ensure this runs on the main UI thread
         DispatchQueue.main.async {
             let panel = NSOpenPanel()
             panel.canChooseFiles = false
             panel.canChooseDirectories = true
             panel.allowsMultipleSelection = false
-            panel.title = "Select Project Root"
-            panel.prompt = "Select"
+            panel.prompt = "Select Root"
             
-            // 关键：激活应用，防止窗口死在后面
+            // Optional: Start in the user's home directory to avoid permission issues with "/"
+            panel.directoryURL = FileManager.default.homeDirectoryForCurrentUser
+            
+            // Activate the app to bring the open panel to the front
             NSApp.activate(ignoringOtherApps: true)
             
-            // 使用 runModal 防止闪退
-            if panel.runModal() == .OK, let url = panel.url {
-                self.projectRoot = url.path
+            // 🛑 CHANGED: Use 'begin' (Async) instead of 'runModal' (Blocking)
+            panel.begin { response in
+                if response == .OK, let url = panel.url {
+                    // Update state back on the main thread
+                    DispatchQueue.main.async {
+                        self.projectRoot = url.path
+                        print("📂 Target set to: \(url.lastPathComponent)")
+                    }
+                }
             }
         }
     }
