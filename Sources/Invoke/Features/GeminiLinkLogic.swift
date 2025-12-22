@@ -267,16 +267,8 @@ class GeminiLinkLogic: ObservableObject {
         print("📋 Prompt copied to clipboard (\(prompt.count) chars)")
         
         // 3. ✨ 触发魔法粘贴 (Magic Paste)
-        // 检查辅助功能权限
-        let hasPermission = AXIsProcessTrusted()
-        if hasPermission {
-            print("🎯 Calling MagicPaster...")
-            MagicPaster.shared.pasteToBrowser()
-        } else {
-            print("⚠️ Accessibility permission not granted! Cannot auto-paste.")
-            print("   User needs to manually paste (Cmd+V) in browser")
-            showNotification(title: "Manual Paste Required", body: "Press Cmd+V in Gemini to paste the protocol")
-        }
+        print("🎯 Attempting auto-paste...")
+        MagicPaster.shared.pasteToBrowser()
     }
     
     /// Review 最后一次改动（点击 Review 按钮）
@@ -321,15 +313,9 @@ class GeminiLinkLogic: ObservableObject {
                 self.pasteboard.clearContents()
                 self.pasteboard.setString(prompt, forType: .string)
                 
-                // 检查权限并粘贴
-                let hasPermission = AXIsProcessTrusted()
-                if hasPermission {
-                    print("🎯 Auto-pasting review request...")
-                    MagicPaster.shared.pasteToBrowser()
-                } else {
-                    print("⚠️ Manual paste required")
-                    self.showNotification(title: "Review Request Ready", body: "Press Cmd+V in Gemini")
-                }
+                // 触发自动粘贴 (权限检查在 MagicPaster 内部处理)
+                print("🎯 Auto-pasting review request...")
+                MagicPaster.shared.pasteToBrowser()
             }
         }
     }

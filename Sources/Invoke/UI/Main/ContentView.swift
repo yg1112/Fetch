@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ContentView: View {
     @StateObject var logic = GeminiLinkLogic()
+    @State private var isAlwaysOnTop = false
     
     // 颜色常量
     let glassBackground = NSVisualEffectView.Material.hudWindow // macOS 原生 HUD 材质
@@ -39,6 +40,17 @@ struct ContentView: View {
                         .buttonStyle(.plain)
                         
                         Spacer()
+                        
+                        // Pin Button (置顶)
+                        Button(action: toggleAlwaysOnTop) {
+                            Image(systemName: isAlwaysOnTop ? "pin.fill" : "pin")
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundColor(isAlwaysOnTop ? .blue : .secondary.opacity(0.5))
+                                .frame(width: 20, height: 20)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .help(isAlwaysOnTop ? "取消置顶" : "窗口置顶")
                         
                         // Close Button
                         Button(action: { NSApplication.shared.terminate(nil) }) {
@@ -123,6 +135,17 @@ struct ContentView: View {
                 .stroke(Color.white.opacity(0.1), lineWidth: 0.5)
         )
         .frame(width: 320) // 稍微加宽一点，让 Safe/Local Only 文字能放下
+    }
+    
+    // MARK: - 置顶功能
+    private func toggleAlwaysOnTop() {
+        isAlwaysOnTop.toggle()
+        
+        // 查找当前窗口并设置 level
+        if let window = NSApplication.shared.windows.first(where: { $0.isVisible && !$0.isMiniaturized }) {
+            window.level = isAlwaysOnTop ? .floating : .normal
+            print("🔝 Window level set to: \(isAlwaysOnTop ? "Always On Top" : "Normal")")
+        }
     }
 }
 
