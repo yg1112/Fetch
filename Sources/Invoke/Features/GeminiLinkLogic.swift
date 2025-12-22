@@ -131,8 +131,23 @@ class GeminiLinkLogic: ObservableObject {
         
         guard let content = pasteboard.string(forType: .string) else { return }
         
-        // 🎯 检测 Base64 单行流格式 (echo '...' | base64 -d > file)
-        if content.contains("base64 -d >") || content.contains("base64 -d>") {
+        // 🎯 新格式：__FILE_START__ / __FILE_END__ 标记 (Copy Response 流)
+        if content.contains("__FILE_START__") && content.contains("__FILE_END__") {
+            print("🔍 Detected Bulk Code Export format!")
+            print("📋 Content length: \(content.count) chars")
+            
+            restoreUserClipboardImmediately()
+            
+            DispatchQueue.main.async {
+                self.isProcessing = true
+                self.processingStatus = "Detecting files..."
+            }
+            
+            showNotification(title: "Code Detected", body: "Parsing files...")
+            processBulkCodeExport(content)
+            
+        } else if content.contains("base64 -d >") || content.contains("base64 -d>") {
+            // 兼容 Base64 单行流格式
             print("🔍 Detected Base64 one-liner format!")
             print("📋 Content length: \(content.count) chars")
             
@@ -265,6 +280,75 @@ class GeminiLinkLogic: ObservableObject {
                 self.isProcessing = false
                 self.processingStatus = ""
                 self.showNotification(title: "No Changes", body: "Failed to decode files")
+            }
+        }
+    }
+    
+    // MARK: - 新格式：Bulk Code Export (__FILE_START__ / __FILE_END__)
+    
+    private func processBulkCodeExport(_ rawText: String) {
+        DispatchQueue.main.async {
+            self.processingStatus = "Parsing file markers..."
+        }
+        
+        // 匹配格式: __FILE_START__ path/to/file.swift\n<content>\n__FILE_END__
+        let pattern = try! NSRegularExpression(
+            pattern: "__FILE_START__\\s+(.+?)\\n([\\s\\S]*?)__FILE_END__",
+            options: []
+        )
+        let matches = pattern.matches(in: rawText, options: [], range: NSRange(rawText.startIndex..<rawText.endIndex, in: rawText))
+        
+        if matches.isEmpty {
+            print("⚠️ No valid __FILE_START__/__FILE_END__ blocks found")
+            print("📝 Content preview: \(String(rawText.prefix(500)))")
+            
+            DispatchQueue.main.async {
+                self.isProcessing = false
+                self.processingStatus = ""
+                self.showNotification(title: "Parse Error", body: "No valid file markers found")
+            }
+            return
+        }
+        
+        print("✅ Found \(matches.count) file(s) to create/update")
+        DispatchQueue.main.async {
+            self.processingStatus = "Writing \(matches.count) file(s)..."
+        }
+        
+        var updatedFiles: [String] = []
+        
+        for match in matches {
+            if let pathRange = Range(match.range(at: 1), in: rawText),
+               let contentRange = Range(match.range(at: 2), in: rawText) {
+                let filePath = String(rawText[pathRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+                var fileContent = String(rawText[contentRange])
+                
+                // 清理可能存在的 Markdown 代码块标记
+                fileContent = fileContent
+                    .replacingOccurrences(of: "^```\\w*\\n", with: "", options: .regularExpression)
+                    .replacingOccurrences(of: "\n```$", with: "", options: .regularExpression)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                
+                print("📄 Processing: \(filePath)")
+                print("📦 Content length: \(fileContent.count) chars")
+                
+                if writeFileDirectly(relativePath: filePath, content: fileContent + "\n") {
+                    updatedFiles.append(filePath)
+                }
+            }
+        }
+        
+        if !updatedFiles.isEmpty {
+            DispatchQueue.main.async {
+                self.processingStatus = "Committing changes..."
+            }
+            let summary = "Update: \(updatedFiles.map { URL(fileURLWithPath: $0).lastPathComponent }.joined(separator: ", "))"
+            autoCommitAndPush(message: summary, summary: summary)
+        } else {
+            DispatchQueue.main.async {
+                self.isProcessing = false
+                self.processingStatus = ""
+                self.showNotification(title: "No Changes", body: "No files were updated")
             }
         }
     }
@@ -524,8 +608,21 @@ class GeminiLinkLogic: ObservableObject {
             return
         }
         
-        // 优先检测 Base64 单行流格式 (最新格式)
-        if content.contains("base64 -d >") || content.contains("base64 -d>") {
+        // 🎯 优先检测新格式：__FILE_START__ / __FILE_END__
+        if content.contains("__FILE_START__") && content.contains("__FILE_END__") {
+            print("🔍 Found Bulk Code Export format!")
+            print("📋 Content length: \(content.count) chars")
+            
+            DispatchQueue.main.async {
+                self.isProcessing = true
+                self.processingStatus = "Manual apply..."
+            }
+            
+            showNotification(title: "Applying Code", body: "Parsing files...")
+            processBulkCodeExport(content)
+            
+        } else if content.contains("base64 -d >") || content.contains("base64 -d>") {
+            // 兼容 Base64 单行流格式
             print("🔍 Found Base64 one-liner format!")
             print("📋 Content length: \(content.count) chars")
             
@@ -564,7 +661,7 @@ class GeminiLinkLogic: ObservableObject {
         } else {
             print("⚠️ No recognized format in clipboard")
             print("📋 Clipboard preview: \(String(content.prefix(200)))...")
-            showNotification(title: "No Code Found", body: "Expected: echo '...' | base64 -d > file")
+            showNotification(title: "No Code Found", body: "Expected: __FILE_START__ ... __FILE_END__")
         }
     }
     
@@ -574,23 +671,50 @@ class GeminiLinkLogic: ObservableObject {
     func copyGemSetupGuide() {
         print("📖 Copying Gemini Personal Context instruction...")
         
-        // Base64 单行流格式 - 最省空间！
+        // 新格式：利用 "Copy Response" 按钮 + 明确的文件分隔符
         let instruction = """
-        When I say @code, provide a ONE-LINER shell command.
-        
-        Format: echo '<base64_string>' | base64 -d > path/to/file.swift
-        
+        [System Instruction: Bulk Code Export Protocol]
+
+        Trigger: When the user includes "@code" in the prompt.
+
+        Strategy:
+        1. Mode: FULL OVERWRITE. Always output the COMPLETE content of the file(s).
+        2. Format: Output a raw stream designed for "Copy Response" & local parsing.
+        3. Delimiters (CRITICAL):
+           - Use strict separators so the user's local script can split files.
+           - Format:
+             
+             __FILE_START__ <relative_path>
+             <code content>
+             __FILE_END__
+             
+           - Leave 1 empty line between files.
+
+        Example Output:
+        (User: "Create view and model @code")
+
+        __FILE_START__ Sources/Models/User.swift
+        struct User {
+            let id: UUID
+        }
+        __FILE_END__
+
+        __FILE_START__ Sources/Views/UserView.swift
+        import SwiftUI
+        struct UserView: View {
+            var body: some View { ... }
+        }
+        __FILE_END__
+
         Rules:
-        - Encode the COMPLETE file content into a single-line Base64 string
-        - Multiple files = multiple echo commands (each on its own line)
-        - The output block must be ONE code block, minimal height
-        - NO explanation, NO comments
-        - For updates to large files, only show changed functions unless I ask for full file
+        - NO conversational text (keep it clean).
+        - NO Markdown code blocks (```) needed, just raw text between markers.
+        - Always include relative path from project root.
         """
         
         pasteboard.clearContents()
         pasteboard.setString(instruction, forType: .string)
-        showNotification(title: "Instruction Copied", body: "Paste to Gemini Settings > Personal Context")
+        showNotification(title: "Instruction Copied", body: "Paste to Gemini Settings > System Instructions")
         print("📋 Personal Context instruction copied")
     }
     
