@@ -33,14 +33,16 @@ class GitService {
         return output.trimmingCharacters(in: .whitespacesAndNewlines)
     }
     
-    /// 🚀 优化的提交流程
+    /// 🚀 优化的提交流程 (Updated by Test)
     func commitChanges(in directory: String, message: String) throws {
+        print("⚡️ Committing: \(message)")
         _ = try run(args: ["add", "."], in: directory)
         _ = try run(args: ["commit", "-m", message], in: directory)
     }
     
-    /// Push 到远程
+    /// Push 到远程 (Updated)
     func pushToRemote(in directory: String) throws {
+        print("☁️ Pushing to cloud...")
         try? configureCredentialHelper(in: directory)
         _ = try run(args: ["push"], in: directory)
     }
