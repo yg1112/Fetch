@@ -1,12 +1,12 @@
 import SwiftUI
 import AppKit
+import Combine
 
 class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var statusItem: NSStatusItem?
     var floatingPanel: FloatingPanel?
     var onboardingWindow: NSWindow?
     
-    // 保存窗口状态的 Keys
     let posKeyX = "WindowPosX"
     let posKeyY = "WindowPosY"
     let widthKey = "WindowWidth"
@@ -32,7 +32,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
     
     private func setupFloatingPanel() {
-        // 1. 尺寸恢复：默认更宽，更像一个 Dashboard
+        // 1. 默认尺寸
         let defaultW: CGFloat = 480
         let defaultH: CGFloat = 320
         
@@ -48,8 +48,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         
         let contentRect = NSRect(x: x, y: y, width: finalW, height: finalH)
         
-        // 2. 关键修复：使用 .titled + .fullSizeContentView 来获得 Resize 能力，同时保持无边框外观
-        // 注意：移除了 .hudWindow，因为它限制太多，我们自己画背景
         floatingPanel = FloatingPanel(
             contentRect: contentRect,
             styleMask: [.titled, .closable, .resizable, .fullSizeContentView, .nonactivatingPanel],
@@ -59,29 +57,25 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         
         if let panel = floatingPanel {
             panel.delegate = self
-            panel.level = .normal
             
-            // 3. 视觉魔法：隐藏标题栏，但保留 Frame 的功能
+            // 🔥 核心修改：默认使用 .floating 层级
+            // 这确保了 App 启动时会在浏览器/Xcode 之上，不会被挡住
+            panel.level = .floating 
+            
             panel.titlebarAppearsTransparent = true
             panel.titleVisibility = .hidden
             panel.isMovableByWindowBackground = true
             
-            // 隐藏红绿灯按钮，保持极简
             panel.standardWindowButton(.closeButton)?.isHidden = true
             panel.standardWindowButton(.miniaturizeButton)?.isHidden = true
             panel.standardWindowButton(.zoomButton)?.isHidden = true
             
-            // 允许跨空间显示
             panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-            
-            // 背景完全透明，由 SwiftUI 接管
             panel.backgroundColor = .clear
             panel.isOpaque = false
             panel.hasShadow = true
-            
             panel.minSize = NSSize(width: 380, height: 200)
             
-            // 注入 UI
             let appUI = AppUI(
                 onSettings: {},
                 onQuit: { NSApplication.shared.terminate(nil) }
@@ -90,7 +84,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             let hostingView = NSHostingView(rootView: appUI)
             hostingView.autoresizingMask = [.width, .height]
             hostingView.frame = NSRect(x: 0, y: 0, width: finalW, height: finalH)
-            // 这一步很重要：让 SwiftUI 背景透明
             hostingView.layer?.backgroundColor = NSColor.clear.cgColor
             
             panel.contentView = hostingView
@@ -98,7 +91,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
     }
     
-    // 监听状态保存
     func windowDidMove(_ notification: Notification) { saveWindowFrame() }
     func windowDidResize(_ notification: Notification) { saveWindowFrame() }
     
