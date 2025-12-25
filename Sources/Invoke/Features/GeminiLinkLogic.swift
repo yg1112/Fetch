@@ -17,10 +17,7 @@ class GeminiLinkLogic: ObservableObject {
         didSet {
             UserDefaults.standard.set(projectRoot, forKey: "ProjectRoot")
             loadLogs()
-            // 路径改变时重启监听
-            if !projectRoot.isEmpty {
-                startListening()
-            }
+            if !projectRoot.isEmpty { startListening() }
         }
     }
     
@@ -54,9 +51,7 @@ class GeminiLinkLogic: ObservableObject {
     }
     
     @Published var gitMode: GitMode = GitMode(rawValue: UserDefaults.standard.string(forKey: "GitMode") ?? "yolo") ?? .yolo {
-        didSet {
-            UserDefaults.standard.set(gitMode.rawValue, forKey: "GitMode")
-        }
+        didSet { UserDefaults.standard.set(gitMode.rawValue, forKey: "GitMode") }
     }
     
     @Published var isListening: Bool = false
@@ -69,7 +64,10 @@ class GeminiLinkLogic: ObservableObject {
     private var lastChangeCount: Int = 0
     private var lastUserClipboard: String = ""
     
-    // MARK: - Smart Protocol Markers
+    // MARK: - Smart Protocol Markers (Safety Lock Added)
+    // 🔒 核心安全锁：只有以这个开头的剪贴板内容才会被处理
+    private let magicHeader = ">>> INVOKE"
+    
     private let fileHeader = ">>> FILE:"
     private let searchStart = "<<<<<<< SEARCH"
     private let replaceEnd = ">>>>>>> REPLACE"
@@ -79,7 +77,6 @@ class GeminiLinkLogic: ObservableObject {
     init() {
         if !projectRoot.isEmpty {
             loadLogs()
-            // 🐛 核心修复：App 启动时如果已有路径，立即开启监听！
             startListening()
         }
     }
@@ -106,9 +103,7 @@ class GeminiLinkLogic: ObservableObject {
 
     // MARK: - Listening Logic
     func startListening() {
-        // 防止重复启动
         if isListening && timer != nil { return }
-        
         isListening = true
         lastChangeCount = pasteboard.changeCount
         
@@ -116,11 +111,10 @@ class GeminiLinkLogic: ObservableObject {
             lastUserClipboard = currentContent
         }
         
-        // 启动轮询
         timer = Timer.scheduledTimer(withTimeInterval: 0.8, repeats: true) { [weak self] _ in
             self?.checkClipboard()
         }
-        print("👂 Listening service started...")
+        print("👂 Listening service started (Safety Lock: ON)...")
     }
     
     private func checkClipboard() {
@@ -129,15 +123,23 @@ class GeminiLinkLogic: ObservableObject {
         
         guard let content = pasteboard.string(forType: .string) else { return }
         
-        // 智能检测逻辑
+        // 🛑 安全检查：如果不包含魔法头，直接忽略！
+        // 这意味着你复制任何其他代码、聊天记录，Fetch 都会无视，体验大大提升。
+        guard content.contains(magicHeader) else {
+            // 只是记录一下，不做任何反应
+            if !content.contains("@code") {
+                lastUserClipboard = content
+            }
+            return
+        }
+        
+        // 只有包含 >>> INVOKE 才会走到这里
         let hasSmartEdit = content.contains(searchStart)
         let hasNewFile = content.contains(newFileStart)
         
         if hasSmartEdit || hasNewFile {
-            print("⚡️ Detected Protocol Content (Length: \(content.count))")
+            print("⚡️ Detected Protocol Content (Verified)")
             processAllChanges(content)
-        } else if !content.contains("@code") {
-            lastUserClipboard = content
         }
     }
     
@@ -149,9 +151,7 @@ class GeminiLinkLogic: ObservableObject {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
             
-            // 清洗：有些编辑器复制出来会带 \r\n，统一换成 \n
             let normalizedText = rawText.replacingOccurrences(of: "\r\n", with: "\n")
-            
             var modifiedFiles: Set<String> = []
             var warningFiles: [String] = []
             
@@ -222,8 +222,7 @@ class GeminiLinkLogic: ObservableObject {
         }
     }
     
-    // MARK: - Patch Engine (Enhanced Regex)
-    
+    // MARK: - Patch Engine (Logic Skeleton Match)
     private func applyPatches(to relativePath: String, patchContent: String) -> (modified: Bool, perfect: Bool) {
         let fileURL = URL(fileURLWithPath: projectRoot).appendingPathComponent(relativePath)
         
@@ -233,15 +232,11 @@ class GeminiLinkLogic: ObservableObject {
             return (false, false)
         }
         
-        // 🔥 正则升级：允许 SEARCH 后有空格 (\s*)，增强对 LLM 格式的容错
         let pattern = #"(?s)<<<<<<< SEARCH\s*\n(.*?)\n=======\s*\n(.*?)\n>>>>>>> REPLACE"#
         let regex = try! NSRegularExpression(pattern: pattern)
         let matches = regex.matches(in: patchContent, range: NSRange(patchContent.startIndex..<patchContent.endIndex, in: patchContent))
         
-        if matches.isEmpty {
-            print("⚠️ No regex matches found in block. Check formatting.")
-            return (false, false)
-        }
+        if matches.isEmpty { return (false, false) }
         
         var modified = false
         var perfect = true
@@ -262,7 +257,6 @@ class GeminiLinkLogic: ObservableObject {
             if let range = fileContent.range(of: searchBlock) {
                 fileContent.replaceSubrange(range, with: replaceBlock)
                 modified = true
-                print("✅ Exact match applied: \(relativePath)")
                 continue
             }
             
@@ -270,7 +264,6 @@ class GeminiLinkLogic: ObservableObject {
             if let fuzzyRange = fuzzyMatchLines(searchBlock: searchBlock, in: fileContent) {
                 fileContent.replaceSubrange(fuzzyRange, with: replaceBlock)
                 modified = true
-                print("⚠️ Fuzzy line match applied: \(relativePath)")
                 continue
             }
             
@@ -278,11 +271,18 @@ class GeminiLinkLogic: ObservableObject {
             if let tokenRange = tokenStreamMatch(searchBlock: searchBlock, in: fileContent) {
                 fileContent.replaceSubrange(tokenRange, with: replaceBlock)
                 modified = true
-                print("🔥 Token stream match applied: \(relativePath)")
                 continue
             }
             
-            print("❌ Match failed for block in \(relativePath)")
+            // Level 4: Logic Skeleton
+            if let logicRange = logicSkeletonMatch(searchBlock: searchBlock, in: fileContent) {
+                fileContent.replaceSubrange(logicRange, with: replaceBlock)
+                modified = true
+                print("🧠 Logic skeleton match applied: \(relativePath)")
+                continue
+            }
+            
+            print("❌ All strategies failed for block in \(relativePath)")
             perfect = false
         }
         
@@ -293,21 +293,38 @@ class GeminiLinkLogic: ObservableObject {
         return (modified, perfect)
     }
     
+    // Level 2
     private func fuzzyMatchLines(searchBlock: String, in content: String) -> Range<String.Index>? {
         let searchLines = searchBlock.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) }
         let pattern = searchLines.map { NSRegularExpression.escapedPattern(for: $0) }.joined(separator: "\\s*\\n\\s*")
         return content.range(of: pattern, options: .regularExpression)
     }
     
+    // Level 3
     private func tokenStreamMatch(searchBlock: String, in content: String) -> Range<String.Index>? {
         let searchTokens = searchBlock.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }
         if searchTokens.isEmpty { return nil }
-        
         let escapedTokens = searchTokens.map { NSRegularExpression.escapedPattern(for: $0) }
-        // 允许 token 之间有任意空白字符
         let pattern = escapedTokens.joined(separator: "[\\s\\n]+")
-        
         return content.range(of: pattern, options: .regularExpression)
+    }
+    
+    // Level 4
+    private func logicSkeletonMatch(searchBlock: String, in content: String) -> Range<String.Index>? {
+        let cleanedSearch = stripComments(from: searchBlock)
+        let searchTokens = cleanedSearch.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }
+        if searchTokens.isEmpty { return nil }
+        let filler = "(?:\\s|//[^\\n]*|/\\*[\\s\\S]*?\\*/)+"
+        let escapedTokens = searchTokens.map { NSRegularExpression.escapedPattern(for: $0) }
+        let pattern = escapedTokens.joined(separator: filler)
+        return content.range(of: pattern, options: .regularExpression)
+    }
+    
+    private func stripComments(from text: String) -> String {
+        var newText = text
+        newText = newText.replacingOccurrences(of: "//.*", with: "", options: .regularExpression)
+        newText = newText.replacingOccurrences(of: "/\\*[\\s\\S]*?\\*/", with: "", options: .regularExpression)
+        return newText
     }
     
     private func writeFile(path: String, content: String) -> Bool {
@@ -326,14 +343,10 @@ class GeminiLinkLogic: ObservableObject {
         DispatchQueue.main.async {
             if updatedFiles.isEmpty {
                 self.setStatus("", isBusy: false)
-                if !warningFiles.isEmpty {
-                    self.showNotification(title: "Update Failed", body: "Could not apply changes.")
-                }
+                if !warningFiles.isEmpty { self.showNotification(title: "Update Failed", body: "Could not apply changes.") }
                 return
             }
-            
             let summary = "Update: \(updatedFiles.map { URL(fileURLWithPath: $0).lastPathComponent }.joined(separator: ", "))" + (warningFiles.isEmpty ? "" : " (⚠️ Partial)")
-            
             self.setStatus("Committing...", isBusy: true)
             self.autoCommitAndPush(message: summary, summary: summary)
         }
@@ -347,10 +360,7 @@ class GeminiLinkLogic: ObservableObject {
                 
                 if self.gitMode == .localOnly {
                     self.finishSuccess(hash: hash, summary: summary, title: "Local Commit")
-                    return
-                }
-                
-                if self.gitMode == .yolo {
+                } else if self.gitMode == .yolo {
                     _ = try GitService.shared.pushToRemote(in: self.projectRoot)
                     self.finishSuccess(hash: hash, summary: summary, title: "Pushed to Main")
                 } else {
@@ -390,29 +400,49 @@ class GeminiLinkLogic: ObservableObject {
         }
     }
     
-    // MARK: - Helpers
+    // MARK: - Helpers & Prompt v3.0 (Safety Lock)
     func copyGemSetupGuide() {
+        // 🔥 Prompt 升级：告诉 Gemini 必须使用暗号
         let instruction = """
-        [System Instruction: Smart Edit Protocol]
-        Trigger: When user says "@code".
-        STRATEGY:
-        1. FOR NEW FILES: Use FULL format.
-        2. FOR EXISTING FILES: Use SEARCH/REPLACE blocks.
+        [System Instruction: Fetch App Protocol]
+        
+        You are acting as a coding agent for the 'Fetch' desktop app.
+        
+        ⚠️ CRITICAL RULE:
+        You MUST start every code response with this exact line:
+        >>> INVOKE
+        
+        If you do not include ">>> INVOKE" at the very top, the app will IGNORE your response.
+        
+        --- FORMAT A: NEW FILE ---
+        <<<FILE>>> path/to/new_file.ext
+        (Put full file content here)
+        <<<END>>>
+        
+        --- FORMAT B: SMART EDIT ---
+        >>> FILE: path/to/existing_file.ext
+        <<<<<<< SEARCH
+        (Copy exact lines from original file. 
+         Do NOT add new comments like '// old code' inside SEARCH block.
+         Do NOT fix bugs inside SEARCH block. It must match the file EXACTLY.)
+        =======
+        (Put your new code here)
+        >>>>>>> REPLACE
+        
+        --- RULES ---
+        - Do NOT wrap blocks in markdown code fences (```).
         """
-        pasteboard.clearContents()
-        pasteboard.setString(instruction, forType: .string)
+        pasteboard.clearContents(); pasteboard.setString(instruction, forType: .string)
         showNotification(title: "Setup Copied", body: "Paste to Gemini")
     }
     
     func copyProtocol() {
         pasteboard.clearContents()
         pasteboard.setString("@code", forType: .string)
-        showNotification(title: "@code Copied", body: "Paste to Gemini")
+        showNotification(title: "@code Copied", body: "Ready to pair")
     }
     
-    func manualApplyFromClipboard() {
-        checkClipboard()
-    }
+    func manualApplyFromClipboard() { checkClipboard() }
     
     func reviewLastChange() {
         guard let lastLog = changeLogs.first else { return }
@@ -420,8 +450,7 @@ class GeminiLinkLogic: ObservableObject {
             let diff = try? GitService.shared.run(args: ["show", lastLog.commitHash], in: self.projectRoot)
             let prompt = "Please review this commit diff:\n\n\(diff ?? "")"
             DispatchQueue.main.async {
-                self.pasteboard.clearContents()
-                self.pasteboard.setString(prompt, forType: .string)
+                self.pasteboard.clearContents(); self.pasteboard.setString(prompt, forType: .string)
                 MagicPaster.shared.pasteToBrowser()
             }
         }
@@ -450,7 +479,7 @@ class GeminiLinkLogic: ObservableObject {
         NSUserNotificationCenter.default.deliver(notification)
     }
     
-    // MARK: - Persistence
+    // Persistence
     private func getLogFileURL() -> URL? {
         guard !projectRoot.isEmpty else { return nil }
         let name = URL(fileURLWithPath: projectRoot).lastPathComponent
