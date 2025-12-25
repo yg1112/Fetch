@@ -16,6 +16,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // 🚀 Fetch is ready!
         setupMenuBarIcon()
         
+        // 启动本地 API 服务器 (供 Aider CLI 连接)
+        LocalAPIServer.shared.start()
+        
         // 注册 URL Scheme 事件处理
         NSAppleEventManager.shared().setEventHandler(
             self,

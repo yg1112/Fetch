@@ -38,9 +38,6 @@ class BridgeService: ObservableObject {
     func startBridge() {
         connectionStatus = "Starting Native Bridge..."
         webManager.loadGemini()
-        
-        // 启动登录状态监控
-        BrowserWindowController.shared.startLoginMonitor()
     }
     
     /// 停止 Bridge
@@ -49,9 +46,9 @@ class BridgeService: ObservableObject {
         connectionStatus = "Stopped"
     }
     
-    /// 显示登录窗口
+    /// 显示登录窗口 (使用纯 AppKit 控制器，避免 SwiftUI 生命周期导致的 WebKit 崩溃)
     func showLoginWindow() {
-        BrowserWindowController.shared.showLoginWindow()
+        LoginWindowController.shared.show()
     }
     
     /// 发送 Prompt 到 Gemini

@@ -59,7 +59,13 @@ class AiderService: ObservableObject {
         env["AIDER_NO_AUTO_COMMIT"] = "1"  // 我们自己处理 Git
         process.environment = env
         
+        // 获取 LocalAPIServer 端口
+        let apiPort = LocalAPIServer.shared.port
+        
         process.arguments = [
+            "--model", "openai/gemini-2.0-flash",  // 模型名无所谓，发给我们自己
+            "--openai-api-base", "http://127.0.0.1:\(apiPort)/v1",
+            "--openai-api-key", "fetch-local-key", // 骗过校验
             "--no-git",     // 我们自己处理 git
             "--yes",        // 自动应用更改
             "--no-auto-commits"

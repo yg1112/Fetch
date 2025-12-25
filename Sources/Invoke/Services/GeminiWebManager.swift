@@ -1,6 +1,31 @@
 import Foundation
 import WebKit
 import Combine
+import AppKit
+
+// MARK: - InteractiveWebView 子类
+/// 解决 WKWebView 在 SwiftUI 中无法接收键盘输入的问题
+class InteractiveWebView: WKWebView {
+    // 核心修复：明确告诉系统这个 View 接受第一响应者状态
+    override var acceptsFirstResponder: Bool {
+        return true
+    }
+    
+    // 处理鼠标点击事件，确保点击即聚焦
+    override func mouseDown(with event: NSEvent) {
+        super.mouseDown(with: event)
+        self.window?.makeFirstResponder(self)
+    }
+    
+    // 确保键盘事件被正确处理
+    override func keyDown(with event: NSEvent) {
+        super.keyDown(with: event)
+    }
+    
+    override func becomeFirstResponder() -> Bool {
+        return true
+    }
+}
 
 /// Native Gemini Bridge - 替代 Chrome Extension + proxy.py
 /// 使用 WKWebView 直接与 gemini.google.com 通信
@@ -19,8 +44,8 @@ class GeminiWebManager: NSObject, ObservableObject {
     private var pendingPromptId: String?
     private var responseCallback: ((String) -> Void)?
     
-    // 最新 Chrome Mac User-Agent (深度伪装 - 不含 wv/Mobile 关键字)
-    private let chromeUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+    // 最新 Chrome Mac User-Agent (2024年12月版本 - 完全匹配真实 Chrome)
+    private let chromeUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
     
     override init() {
         super.init()
@@ -63,8 +88,8 @@ class GeminiWebManager: NSObject, ObservableObject {
         // Swift <-> JS 消息通道
         config.userContentController.add(self, name: "geminiBridge")
         
-        // 创建隐藏的 WebView (1x1)
-        webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 1, height: 1), configuration: config)
+        // 创建可交互的 WebView (使用子类以支持键盘输入)
+        webView = InteractiveWebView(frame: CGRect(x: 0, y: 0, width: 800, height: 600), configuration: config)
         webView.customUserAgent = chromeUserAgent
         webView.navigationDelegate = self
         
@@ -116,6 +141,43 @@ class GeminiWebManager: NSObject, ObservableObject {
                 print("❌ JS Error: \(error)")
                 self.isProcessing = false
                 completion("Error: \(error.localizedDescription)")
+            }
+        }
+    }
+    
+    // MARK: - Async API (for LocalAPIServer)
+    
+    /// 异步问答接口 - 供 LocalAPIServer 调用
+    func askGemini(prompt: String, model: String = "default") async throws -> String {
+        return try await withCheckedThrowingContinuation { continuation in
+            guard self.isReady && self.isLoggedIn else {
+                continuation.resume(throwing: GeminiError.notReady)
+                return
+            }
+            
+            // 在主线程执行 WebView 操作
+            DispatchQueue.main.async { [weak self] in
+                self?.sendPrompt(prompt, model: model) { response in
+                    if response.hasPrefix("Error:") {
+                        continuation.resume(throwing: GeminiError.responseError(response))
+                    } else {
+                        continuation.resume(returning: response)
+                    }
+                }
+            }
+        }
+    }
+    
+    enum GeminiError: LocalizedError {
+        case notReady
+        case responseError(String)
+        
+        var errorDescription: String? {
+            switch self {
+            case .notReady:
+                return "Gemini WebView not ready or not logged in"
+            case .responseError(let msg):
+                return msg
             }
         }
     }
@@ -331,39 +393,145 @@ extension GeminiWebManager: WKScriptMessageHandler {
 // MARK: - Injected JavaScript
 
 extension GeminiWebManager {
-    /// 浏览器指纹伪装脚本 (在页面加载前执行)
+    /// 浏览器指纹伪装脚本 (在页面加载前执行) - 深度伪装版
     static let fingerprintMaskScript = """
     (function() {
-        // 伪装 Chrome 浏览器特征
-        Object.defineProperty(navigator, 'webdriver', { get: () => false });
-        Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
-        Object.defineProperty(navigator, 'plugins', { get: () => [
-            { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer' },
-            { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai' },
-            { name: 'Native Client', filename: 'internal-nacl-plugin' }
-        ]});
+        'use strict';
         
-        // 伪装 Chrome 特有属性
-        window.chrome = {
-            runtime: {},
-            loadTimes: function() {},
-            csi: function() {},
-            app: {}
+        // === 核心：移除 WebDriver 标记 (Google 检测机器人的核心) ===
+        // 必须返回 undefined，不是 false
+        Object.defineProperty(navigator, 'webdriver', { 
+            get: () => undefined,
+            configurable: true
+        });
+        
+        // 删除可能存在的 webdriver 属性
+        delete navigator.webdriver;
+        
+        // === 伪装 Languages ===
+        Object.defineProperty(navigator, 'languages', { 
+            get: () => ['en-US', 'en', 'zh-CN', 'zh'],
+            configurable: true
+        });
+        
+        // === 伪装 Plugins (Chrome 通常有多个，WKWebView 为空) ===
+        const fakePlugins = {
+            length: 5,
+            0: { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
+            1: { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: '' },
+            2: { name: 'Native Client', filename: 'internal-nacl-plugin', description: '' },
+            3: { name: 'Chromium PDF Plugin', filename: 'internal-pdf-viewer', description: '' },
+            4: { name: 'Microsoft Edge PDF Plugin', filename: 'internal-pdf-viewer', description: '' },
+            item: function(i) { return this[i] || null; },
+            namedItem: function(name) { 
+                for (let i = 0; i < this.length; i++) {
+                    if (this[i] && this[i].name === name) return this[i];
+                }
+                return null;
+            },
+            refresh: function() {}
+        };
+        Object.defineProperty(navigator, 'plugins', { 
+            get: () => fakePlugins,
+            configurable: true
+        });
+        
+        // === 伪装 MimeTypes ===
+        Object.defineProperty(navigator, 'mimeTypes', {
+            get: () => ({
+                length: 4,
+                0: { type: 'application/pdf', suffixes: 'pdf', description: '' },
+                1: { type: 'text/pdf', suffixes: 'pdf', description: '' },
+                item: function(i) { return this[i] || null; },
+                namedItem: function(name) { return null; }
+            }),
+            configurable: true
+        });
+        
+        // === 伪装 Chrome 对象 (非常重要!) ===
+        if (!window.chrome) {
+            window.chrome = {};
+        }
+        window.chrome.runtime = window.chrome.runtime || {};
+        window.chrome.loadTimes = window.chrome.loadTimes || function() { 
+            return {
+                commitLoadTime: Date.now() / 1000,
+                connectionInfo: 'http/1.1',
+                finishDocumentLoadTime: Date.now() / 1000,
+                finishLoadTime: Date.now() / 1000,
+                firstPaintAfterLoadTime: 0,
+                firstPaintTime: Date.now() / 1000,
+                navigationType: 'Other',
+                npnNegotiatedProtocol: 'http/1.1',
+                requestTime: Date.now() / 1000,
+                startLoadTime: Date.now() / 1000,
+                wasAlternateProtocolAvailable: false,
+                wasFetchedViaSpdy: false,
+                wasNpnNegotiated: false
+            };
+        };
+        window.chrome.csi = window.chrome.csi || function() {
+            return {
+                onloadT: Date.now(),
+                pageT: Date.now() - performance.timing.navigationStart,
+                startE: performance.timing.navigationStart,
+                tran: 15
+            };
+        };
+        window.chrome.app = window.chrome.app || { isInstalled: false, InstallState: {}, RunningState: {} };
+        
+        // === 伪装 Permissions API ===
+        const originalQuery = Permissions.prototype.query;
+        Permissions.prototype.query = function(parameters) {
+            if (parameters.name === 'notifications') {
+                return Promise.resolve({ state: Notification.permission });
+            }
+            return originalQuery.call(this, parameters);
         };
         
-        // 隐藏 WKWebView 特征 (重要!)
-        // 注意：我们不能删除 window.webkit，因为我们需要它来通信
-        // 但可以在 Google 检测前让它看起来不像 WKWebView
-        
-        // 伪装 WebGL 渲染器
+        // === 伪装 WebGL 渲染器 ===
         const getParameterProxy = WebGLRenderingContext.prototype.getParameter;
         WebGLRenderingContext.prototype.getParameter = function(param) {
             if (param === 37445) return 'Intel Inc.';
-            if (param === 37446) return 'Intel Iris OpenGL Engine';
+            if (param === 37446) return 'Intel Iris Pro OpenGL Engine';
+            if (param === 7937) return 'WebKit WebGL';
             return getParameterProxy.call(this, param);
         };
         
-        console.log('🎭 Fingerprint mask applied');
+        // === 伪装 Canvas 指纹 ===
+        const originalToDataURL = HTMLCanvasElement.prototype.toDataURL;
+        HTMLCanvasElement.prototype.toDataURL = function(type) {
+            if (type === 'image/png' && this.width === 220 && this.height === 30) {
+                // 可能是指纹检测，添加微小噪声
+                const ctx = this.getContext('2d');
+                if (ctx) {
+                    const imageData = ctx.getImageData(0, 0, this.width, this.height);
+                    for (let i = 0; i < imageData.data.length; i += 4) {
+                        imageData.data[i] ^= 1; // 微小修改
+                    }
+                    ctx.putImageData(imageData, 0, 0);
+                }
+            }
+            return originalToDataURL.apply(this, arguments);
+        };
+        
+        // === 隐藏 Automation 标志 ===
+        Object.defineProperty(navigator, 'platform', {
+            get: () => 'MacIntel',
+            configurable: true
+        });
+        
+        Object.defineProperty(navigator, 'vendor', {
+            get: () => 'Google Inc.',
+            configurable: true
+        });
+        
+        Object.defineProperty(navigator, 'maxTouchPoints', {
+            get: () => 0,
+            configurable: true
+        });
+        
+        console.log('🎭 Deep fingerprint mask applied (v2)');
     })();
     """
     

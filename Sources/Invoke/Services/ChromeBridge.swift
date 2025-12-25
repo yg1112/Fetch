@@ -98,27 +98,9 @@ class ChromeBridge: ObservableObject {
         return nil
     }
     
-    /// 从浏览器获取 Cookie (优先从数据库读取完整 Cookie，包括 HttpOnly)
+    /// 从浏览器获取 Cookie (通过 AppleScript，仅用于辅助功能)
+    /// 注意：此方法无法获取 HttpOnly Cookie，不能用于持久化登录
     func fetchCookiesFromChrome(completion: @escaping (Result<String, ChromeError>) -> Void) {
-        // 首先尝试从 Cookie 数据库读取（包含 HttpOnly Cookie）
-        ChromeCookieReader.shared.readGoogleCookies { [weak self] result in
-            switch result {
-            case .success(let cookies):
-                // 将 HTTPCookie 数组转换为字符串格式
-                let cookieString = cookies.map { "\($0.name)=\($0.value)" }.joined(separator: "; ")
-                print("🔮 从数据库读取到 \(cookies.count) 个完整 Cookie")
-                completion(.success(cookieString))
-                
-            case .failure(let dbError):
-                print("⚠️ 数据库读取失败: \(dbError), 回退到 AppleScript 方式")
-                // 回退到 AppleScript 方式
-                self?.fetchCookiesViaAppleScript(completion: completion)
-            }
-        }
-    }
-    
-    /// 通过 AppleScript 获取 Cookie (备用方案，不包含 HttpOnly)
-    private func fetchCookiesViaAppleScript(completion: @escaping (Result<String, ChromeError>) -> Void) {
         DispatchQueue.global(qos: .userInitiated).async {
             // 1. 检测运行中的浏览器
             guard let browser = self.detectRunningBrowser() else {
