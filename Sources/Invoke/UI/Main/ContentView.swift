@@ -42,7 +42,7 @@ struct ContentView: View {
                     
                     Spacer()
                     
-                    // 3. 🔥 全新设计的 Mode Selector (带解释的菜单)
+                    // 3. Mode Selector
                     Menu {
                         ForEach(GeminiLinkLogic.GitMode.allCases, id: \.self) { mode in
                             Button(action: { logic.gitMode = mode }) {
@@ -50,7 +50,6 @@ struct ContentView: View {
                                     if logic.gitMode == mode { Image(systemName: "checkmark") }
                                     Text(mode.title)
                                     Image(systemName: mode.icon)
-                                    // 菜单里的解释文本，让用户秒懂
                                     Text("- " + mode.description).font(.caption)
                                 }
                             }
@@ -116,8 +115,8 @@ struct ContentView: View {
                 // === FOOTER ===
                 HStack(spacing: 16) {
                     Menu {
-                        Button("📋 Copy @code Protocol") { logic.copyProtocol() }
-                        Button("⚙️ First Time Setup") { logic.copyGemSetupGuide() }
+                        // 🔥 菜单优化：改名，删鸡肋
+                        Button("📋 Copy System Prompt") { logic.copyGemSetupGuide() }
                         Button("🔒 Check Permissions") { openAccessibilitySettings() }
                     } label: {
                         HStack {
@@ -174,14 +173,6 @@ struct ContentView: View {
         case .ready: return neonGreen
         }
     }
-    var statusDescription: String {
-        switch currentStatus {
-        case .error: return "Missing Permissions"
-        case .warning: return "No Target Selected"
-        case .processing: return "Processing..."
-        case .ready: return "Listening..."
-        }
-    }
     
     private func toggleAlwaysOnTop() {
         if let panel = NSApplication.shared.windows.first(where: { $0 is FloatingPanel }) {
@@ -196,12 +187,11 @@ struct ContentView: View {
     }
 }
 
-// MARK: - Subcomponents (Keep code clean)
+// MARK: - Subcomponents
 
 struct StatusIndicator: View {
     let status: ContentView.AppStatus
     let color: Color
-    
     var body: some View {
         ZStack {
             if status != .ready {
@@ -217,21 +207,16 @@ struct StatusIndicator: View {
 struct ProjectSelector: View {
     @ObservedObject var logic: GeminiLinkLogic
     let color: Color
-    
     var body: some View {
         Button(action: logic.selectProjectRoot) {
             HStack(spacing: 6) {
                 Image(systemName: logic.projectRoot.isEmpty ? "folder.badge.plus" : "folder.fill")
                     .font(.system(size: 10))
                     .foregroundColor(logic.projectRoot.isEmpty ? color : .white)
-                
                 Text(logic.projectRoot.isEmpty ? "SELECT TARGET" : URL(fileURLWithPath: logic.projectRoot).lastPathComponent.uppercased())
                     .font(.system(size: 11, weight: .bold, design: .monospaced))
                     .foregroundColor(logic.projectRoot.isEmpty ? color : .white)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .frame(maxWidth: 140, alignment: .leading)
-                
+                    .lineLimit(1).truncationMode(.middle).frame(maxWidth: 140, alignment: .leading)
                 Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold)).foregroundColor(.white.opacity(0.3))
             }
             .padding(.horizontal, 10).padding(.vertical, 5)
@@ -246,14 +231,12 @@ struct ProjectSelector: View {
 struct WindowControls: View {
     @Binding var isAlwaysOnTop: Bool
     let toggleAction: () -> Void
-    
     var body: some View {
         HStack(spacing: 12) {
             Button(action: toggleAction) {
                 Image(systemName: isAlwaysOnTop ? "pin.fill" : "pin").font(.system(size: 12))
                     .foregroundColor(isAlwaysOnTop ? Color.blue : .gray)
             }.buttonStyle(ScaleButtonStyle()).focusable(false)
-            
             Button(action: { NSApplication.shared.terminate(nil) }) {
                 Image(systemName: "xmark").font(.system(size: 12, weight: .bold)).foregroundColor(.gray)
             }.buttonStyle(ScaleButtonStyle()).focusable(false)
@@ -264,7 +247,6 @@ struct WindowControls: View {
 struct ProcessingBanner: View {
     let status: String
     let color: Color
-    
     var body: some View {
         HStack(spacing: 10) {
             ProgressView().scaleEffect(0.6).progressViewStyle(CircularProgressViewStyle(tint: color))
@@ -280,7 +262,6 @@ struct TransactionCard: View {
     let log: ChangeLog
     @ObservedObject var logic: GeminiLinkLogic
     @State private var isHovering = false
-    
     var body: some View {
         HStack(spacing: 12) {
             ZStack {
@@ -347,20 +328,18 @@ struct EmptyStateView: View {
     let status: ContentView.AppStatus
     let neonColor: Color; let orangeColor: Color; let dangerColor: Color
     let smartFont: Font; let onFixAction: () -> Void
-    
     var body: some View {
         VStack(spacing: 18) {
             Button(action: { if status == .error { onFixAction() } }) { birdIcon }.buttonStyle(.plain).focusable(false)
                 .onHover { inside in if inside && status == .error { NSCursor.pointingHand.push() } else { NSCursor.pop() } }
+                .onTapGesture { if status == .error { onFixAction() } }
             VStack(spacing: 6) {
                 Text(statusText).font(smartFont).foregroundColor(statusTextColor).tracking(4)
                 Text(subStatusText).font(.system(size: 10, weight: .medium)).foregroundColor(.gray.opacity(0.6))
             }
-        }.frame(maxWidth: .infinity, maxHeight: .infinity)
-        .contentShape(Rectangle())
+        }.frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle())
         .onTapGesture { if status == .error { onFixAction() } }
     }
-    
     var birdIcon: some View {
         Group {
             if #available(macOS 15.0, *) {
@@ -374,7 +353,6 @@ struct EmptyStateView: View {
             }
         }
     }
-    
     var statusText: String {
         switch status {
         case .ready: return "AWAITING SEEDS"
@@ -383,7 +361,6 @@ struct EmptyStateView: View {
         case .processing: return "DIGESTING..."
         }
     }
-    
     var statusTextColor: Color {
         switch status {
         case .ready: return neonColor
@@ -391,7 +368,6 @@ struct EmptyStateView: View {
         case .warning, .processing: return orangeColor
         }
     }
-    
     var subStatusText: String {
         switch status {
         case .ready: return "Copy code to feed codebase"
