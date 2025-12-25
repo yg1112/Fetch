@@ -6,7 +6,6 @@ struct ContentView: View {
 @State private var isAlwaysOnTop = true
 @State private var hasPermission = AXIsProcessTrusted()
 
-```
 // 🎨 Fetch Palette
 let darkBg = Color(red: 0.05, green: 0.05, blue: 0.07)
 let neonGreen = Color(red: 0.0, green: 0.9, blue: 0.5)
@@ -163,9 +162,6 @@ private func openAccessibilitySettings() {
         NSWorkspace.shared.open(url)
     }
 }
-
-```
-
 }
 
 // MARK: - Subcomponents
@@ -242,7 +238,6 @@ struct TransactionCard: View {
 let log: ChangeLog
 let logic: GeminiLinkLogic
 
-```
 @State private var isHovering = false
 
 var body: some View {
@@ -296,11 +291,8 @@ private func openCommit() {
     if let str = GitService.shared.getCommitURL(for: log.commitHash, in: logic.projectRoot), let url = URL(string: str) { NSWorkspace.shared.open(url) }
 }
 private func timeAgo(_ date: Date) -> String {
-    let formatter = RelativeDateTimeFormatter(); formatter.unitsStyle = .abbreviated; return formatter.localizedString(for: date, relativeTo: Date())
+    let formatter = RelativeDateTimeFormatter(); formatter.unitsStyle = .abbreviated;     return formatter.localizedString(for: date, relativeTo: Date())
 }
-
-```
-
 }
 
 struct GhostActionButton: View {
@@ -331,7 +323,6 @@ let status: ContentView.AppStatus
 let neonColor: Color; let orangeColor: Color; let dangerColor: Color
 let smartFont: Font; let onFixAction: () -> Void
 
-```
 var body: some View {
     VStack(spacing: 18) {
         Button(action: { if status == .error { onFixAction() } }) { birdIcon }.buttonStyle(.plain).focusable(false)
@@ -381,7 +372,4 @@ var subStatusText: String {
     case .processing: return "Applying changes..."
     }
 }
-
-```
-
 }
