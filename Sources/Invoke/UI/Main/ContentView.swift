@@ -232,10 +232,13 @@ struct ProcessingBanner: View {
     }
 }
 
-// ♻️ REFACTORED: Split into smaller parts for faster compilation
+// ♻️ FIX: Use simple reference to avoid compiler confusion
 struct TransactionCard: View {
     let log: ChangeLog
-    @ObservedObject var logic: GeminiLinkLogic
+    // 注意：这里改成 let，避免 @ObservedObject 的歧义
+    // 我们不需要监听 logic 的变化来更新这个 Cell，只需要调用它的方法
+    let logic: GeminiLinkLogic
+    
     @State private var isHovering = false
     
     var body: some View {
@@ -276,6 +279,8 @@ struct TransactionCard: View {
                 Button(action: openCommit) {
                     Image(systemName: "safari").foregroundColor(.blue).frame(width: 28, height: 28).background(Color.blue.opacity(0.1)).clipShape(Circle())
                 }.buttonStyle(ScaleButtonStyle()).focusable(false)
+                
+                // 修复点：直接调用
                 Button(action: { logic.closePR(for: log) }) {
                     Image(systemName: "xmark").foregroundColor(.red).frame(width: 28, height: 28).background(Color.red.opacity(0.1)).clipShape(Circle())
                 }.buttonStyle(ScaleButtonStyle()).focusable(false)
@@ -339,7 +344,6 @@ struct EmptyStateView: View {
                     .symbolEffect(.wiggle, options: .repeating, isActive: status == .ready)
                     .symbolEffect(.pulse, options: .repeating, isActive: status == .error)
             } else {
-                // Fallback for macOS 14: Use Pulse only to avoid warning
                 Image(systemName: "bird.fill").font(.system(size: 48)).foregroundColor(statusTextColor)
                     .symbolEffect(.pulse, isActive: status == .ready || status == .error)
             }
