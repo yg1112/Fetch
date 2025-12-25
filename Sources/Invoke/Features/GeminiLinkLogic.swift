@@ -55,7 +55,7 @@ class GeminiLinkLogic: ObservableObject {
     private var lastChangeCount: Int = 0
     private var lastUserClipboard: String = ""
     
-    // 🛡️ 安全拆分：防止被解析器误读
+    // 🛡️ 安全拆分定义 (防止 Parser 误读)
     private let magicHeader = ">>>" + " INVOKE"
     private let fileHeader = ">>>" + " FILE:"
     private let searchStart = "<<<<<<<" + " SEARCH"
@@ -98,14 +98,9 @@ class GeminiLinkLogic: ObservableObject {
         lastChangeCount = pasteboard.changeCount
         guard let content = pasteboard.string(forType: .string) else { return }
         
-        // 🛑 防误触：忽略 System Instruction
+        // 🛑 防误触
         let ignoreSig = "[System Instruction: " + "Fetch App Protocol]"
-        if content.contains(ignoreSig) {
-            print("🛡️ Ignoring System Prompt")
-            return
-        }
-        
-        // 🛑 防误触：忽略 Review Request
+        if content.contains(ignoreSig) { return }
         if content.contains("[Fetch Review Request]") { return }
         
         // 🔒 安全锁
@@ -141,7 +136,7 @@ class GeminiLinkLogic: ObservableObject {
     }
     
     private func parseFull(_ text: String) -> [FilePayload] {
-        // 使用拆分的字符串构建正则，防止自指
+        // 构造正则时使用变量，避免源码中出现完整标记
         let p = "(?s)" + newFileStart + "\\s*([^\\n]+)\\n(.*?)\\n" + newFileEnd
         let regex = try! NSRegularExpression(pattern: p)
         let matches = regex.matches(in: text, range: NSRange(text.startIndex..<text.endIndex, in: text))
@@ -179,7 +174,6 @@ class GeminiLinkLogic: ObservableObject {
             let replace = String(patch[r2])
             if search.hasPrefix("```") { search = search.replacingOccurrences(of: "```", with: "") }
             
-            // Levels 1-4
             if let r = content.range(of: search) { content.replaceSubrange(r, with: replace); mod = true; continue }
             if let r = fuzzyMatch(search, content) { content.replaceSubrange(r, with: replace); mod = true; continue }
             if let r = tokenMatch(search, content) { content.replaceSubrange(r, with: replace); mod = true; continue }
@@ -243,7 +237,10 @@ class GeminiLinkLogic: ObservableObject {
     
     // MARK: - User Facing
     func copyGemSetupGuide() {
+        // 🔥 这里是核心修正：使用变量插值来生成 Prompt，而不是直接写死字符串
+        // 这样剪贴板里的源码本身就不会包含完整的标记
         let header = "[System Instruction: " + "Fetch App Protocol]"
+        
         let text = """
         \(header)
         
@@ -251,17 +248,17 @@ class GeminiLinkLogic: ObservableObject {
         >>> INVOKE
         
         FORMAT A (New):
-        <<<FILE>>> path/file
+        \(newFileStart) path/file
         content
-        <<<END>>>
+        \(newFileEnd)
         
         FORMAT B (Edit):
         >>> FILE: path/file
-        <<<<<<< SEARCH
+        \(searchStart)
         (Exact match)
         =======
         (New code)
-        >>>>>>> REPLACE
+        \(replaceEnd)
         """
         pasteboard.clearContents(); pasteboard.setString(text, forType: .string)
         showNotification("System Prompt Copied", "Paste to Gemini")
@@ -283,8 +280,6 @@ class GeminiLinkLogic: ObservableObject {
             DispatchQueue.main.async {
                 self.setStatus("", isBusy: false)
                 self.pasteboard.clearContents(); self.pasteboard.setString(p, forType: .string)
-                
-                // 🔥 触发幽灵注入
                 MagicPaster.shared.pasteToBrowser()
             }
         }
