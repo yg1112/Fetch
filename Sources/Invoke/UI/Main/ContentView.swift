@@ -4,32 +4,33 @@ import ApplicationServices
 struct ContentView: View {
     @StateObject private var bridgeService = BridgeService.shared
     @StateObject private var aiderService = AiderService.shared
+    @StateObject private var webManager = GeminiWebManager.shared
     @State private var inputText = ""
     @State private var projectPath = UserDefaults.standard.string(forKey: "ProjectRoot") ?? ""
-    @State private var isAlwaysOnTop = true
-    
-    // 🎨 Fetch Palette
-    let darkBg = Color(red: 0.05, green: 0.05, blue: 0.07)
-    let neonGreen = Color(red: 0.0, green: 0.9, blue: 0.5)
-    let neonBlue = Color(red: 0.0, green: 0.5, blue: 1.0)
-    let neonOrange = Color(red: 1.0, green: 0.6, blue: 0.0)
-    let dangerRed = Color(red: 1.0, green: 0.3, blue: 0.4)
+@State private var isAlwaysOnTop = true
 
-    var body: some View {
-        ZStack {
-            darkBg.opacity(0.95).edgesIgnoringSafeArea(.all)
-            
-            RoundedRectangle(cornerRadius: 16)
-                .strokeBorder(
-                    LinearGradient(
-                        colors: [Color.white.opacity(0.1), Color.white.opacity(0.02)],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ),
-                    lineWidth: 1
-                )
-            
-            VStack(spacing: 0) {
+// 🎨 Fetch Palette
+let darkBg = Color(red: 0.05, green: 0.05, blue: 0.07)
+let neonGreen = Color(red: 0.0, green: 0.9, blue: 0.5)
+let neonBlue = Color(red: 0.0, green: 0.5, blue: 1.0)
+let neonOrange = Color(red: 1.0, green: 0.6, blue: 0.0)
+let dangerRed = Color(red: 1.0, green: 0.3, blue: 0.4)
+
+var body: some View {
+    ZStack {
+        darkBg.opacity(0.95).edgesIgnoringSafeArea(.all)
+        
+        RoundedRectangle(cornerRadius: 16)
+            .strokeBorder(
+                LinearGradient(
+                    colors: [Color.white.opacity(0.1), Color.white.opacity(0.02)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                ),
+                lineWidth: 1
+            )
+        
+        VStack(spacing: 0) {
                 // === HUD HEADER ===
                 headerView
                 
@@ -66,13 +67,31 @@ struct ContentView: View {
         HStack(spacing: 12) {
             // 状态指示灯
             Circle()
-                .fill(bridgeService.connectionStatus.contains("Connected") ? neonGreen : dangerRed)
+                .fill(bridgeService.isLoggedIn ? neonGreen : dangerRed)
                 .frame(width: 8, height: 8)
-                .shadow(color: bridgeService.connectionStatus.contains("Connected") ? neonGreen.opacity(0.8) : dangerRed.opacity(0.8), radius: 6)
+                .shadow(color: bridgeService.isLoggedIn ? neonGreen.opacity(0.8) : dangerRed.opacity(0.8), radius: 6)
             
             Text(bridgeService.connectionStatus)
                 .font(.system(size: 10, weight: .medium, design: .monospaced))
                 .foregroundColor(.gray)
+            
+            // 登录按钮 (未登录时显示)
+            if !bridgeService.isLoggedIn {
+                Button(action: { bridgeService.showLoginWindow() }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "person.circle")
+                        Text("Login")
+                    }
+                    .font(.system(size: 10, weight: .bold))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(neonOrange)
+                    .foregroundColor(.black)
+                    .cornerRadius(4)
+                }
+                .buttonStyle(ScaleButtonStyle())
+                .focusable(false)
+            }
             
             Spacer()
             
@@ -259,7 +278,7 @@ struct ContentView: View {
     
     private func sendMessage() {
         guard !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        aiderService.sendCommand(inputText)
+        aiderService.sendUserMessage(inputText)
         inputText = ""
     }
     
@@ -306,7 +325,7 @@ struct ChatBubble: View {
 // MARK: - Scale Button Style
 
 struct ScaleButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
+func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .scaleEffect(configuration.isPressed ? 0.95 : 1)
             .animation(.easeInOut(duration: 0.1), value: configuration.isPressed)

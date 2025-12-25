@@ -10,5 +10,18 @@
 	<string>AppIcon</string>
 	<key>LSUIElement</key>
 	<true/>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.fetch.auth</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>fetch-auth</string>
+			</array>
+		</dict>
+	</array>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Fetch 需要访问 Google Chrome 以读取您的登录状态，从而实现一键自动登录 Gemini。</string>
 </dict>
 </plist>

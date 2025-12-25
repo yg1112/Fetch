@@ -1,81 +1,72 @@
 import Foundation
+import Combine
 
+/// Bridge Service v2.0 - Native WKWebView 实现
+/// 不再需要 Python proxy，直接使用 GeminiWebManager
 class BridgeService: ObservableObject {
     static let shared = BridgeService()
-    private var process: Process?
+    
     @Published var isRunning = false
-    @Published var connectionStatus = "Disconnected"
+    @Published var connectionStatus = "Initializing..."
+    @Published var isLoggedIn = false
     
-    private var healthCheckTimer: Timer?
-
-    // 开发环境：指向 gemini-bridge 源码目录
-    private let bridgeScriptPath = "/Users/yukungao/github/Fetch/gemini-bridge/proxy.py"
-
+    private var cancellables = Set<AnyCancellable>()
+    private let webManager = GeminiWebManager.shared
+    
+    private init() {
+        setupBindings()
+    }
+    
+    private func setupBindings() {
+        // 订阅 WebManager 状态
+        webManager.$connectionStatus
+            .receive(on: DispatchQueue.main)
+            .assign(to: &$connectionStatus)
+        
+        webManager.$isLoggedIn
+            .receive(on: DispatchQueue.main)
+            .assign(to: &$isLoggedIn)
+        
+        webManager.$isReady
+            .receive(on: DispatchQueue.main)
+            .assign(to: &$isRunning)
+    }
+    
+    // MARK: - Public API
+    
+    /// 启动 Bridge (初始化 WebView)
     func startBridge() {
-        guard !isRunning else { return }
+        connectionStatus = "Starting Native Bridge..."
+        webManager.loadGemini()
         
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
-        process.arguments = [bridgeScriptPath]
-        process.currentDirectoryURL = URL(fileURLWithPath: bridgeScriptPath).deletingLastPathComponent()
-        
-        // 管道处理日志
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = pipe
-        
-        process.terminationHandler = { [weak self] _ in
-            DispatchQueue.main.async {
-                self?.isRunning = false
-                self?.connectionStatus = "Bridge Stopped"
-                self?.stopHealthCheck()
-            }
-        }
-
-        do {
-            try process.run()
-            self.process = process
-            self.isRunning = true
-            self.connectionStatus = "Bridge Running (Port 3000)"
-            
-            // 启动健康检查轮询
-            startHealthCheck()
-        } catch {
-            print("Failed to start bridge: \(error)")
-            self.connectionStatus = "Start Failed"
-        }
+        // 启动登录状态监控
+        BrowserWindowController.shared.startLoginMonitor()
     }
-
+    
+    /// 停止 Bridge
     func stopBridge() {
-        process?.terminate()
-        process = nil
         isRunning = false
-        stopHealthCheck()
+        connectionStatus = "Stopped"
     }
     
-    private func startHealthCheck() {
-        healthCheckTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
-            guard self?.isRunning == true else { return }
-            self?.checkHealth()
+    /// 显示登录窗口
+    func showLoginWindow() {
+        BrowserWindowController.shared.showLoginWindow()
+    }
+    
+    /// 发送 Prompt 到 Gemini
+    func sendPrompt(_ text: String, model: String = "default", completion: @escaping (String) -> Void) {
+        guard isLoggedIn else {
+            showLoginWindow()
+            completion("Error: Please login to Google first")
+            return
         }
+        
+        webManager.sendPrompt(text, model: model, completion: completion)
     }
     
-    private func stopHealthCheck() {
-        healthCheckTimer?.invalidate()
-        healthCheckTimer = nil
-    }
-    
-    private func checkHealth() {
-        guard let url = URL(string: "http://localhost:3000/v1/health") else { return }
-        URLSession.shared.dataTask(with: url) { [weak self] _, response, _ in
-            DispatchQueue.main.async {
-                if let httpResp = response as? HTTPURLResponse, httpResp.statusCode == 200 {
-                    self?.connectionStatus = "🟢 Bridge Connected"
-                } else {
-                    self?.connectionStatus = "🔴 Bridge Unreachable"
-                }
-            }
-        }.resume()
+    /// 检查健康状态
+    func checkHealth() {
+        webManager.checkLoginStatus()
     }
 }
-
