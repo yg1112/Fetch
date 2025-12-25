@@ -13,7 +13,8 @@ struct ContentView: View {
     let neonOrange = Color(red: 1.0, green: 0.6, blue: 0.0)
     let dangerRed = Color(red: 1.0, green: 0.3, blue: 0.4)
     
-    let smartFont = Font.system(size: 14, weight: .light, design: .monospaced)
+        // 🧠 Smart, Thin Font (Magic Header Verified)
+    let smartFont = Font.system(size: 13, weight: .bold, design: .rounded)
     let permissionTimer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     
     var body: some View {
