@@ -13,12 +13,63 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let heightKey = "WindowHeight"
     
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // 🚀 Fetch is ready!
         setupMenuBarIcon()
         
+        // 启动本地 API 服务器 (供 Aider CLI 连接)
+        LocalAPIServer.shared.start()
+        
+        // 注册 URL Scheme 事件处理
+        NSAppleEventManager.shared().setEventHandler(
+            self,
+            andSelector: #selector(handleURLEvent(_:withReplyEvent:)),
+            forEventClass: AEEventClass(kInternetEventClass),
+            andEventID: AEEventID(kAEGetURL)
+        )
+
         if !UserDefaults.standard.bool(forKey: "hasCompletedOnboarding") {
             showOnboarding()
         } else {
             setupFloatingPanel()
+        }
+    }
+    
+    // MARK: - URL Scheme Handler (Magic Bookmark)
+    
+    @objc func handleURLEvent(_ event: NSAppleEventDescriptor, withReplyEvent replyEvent: NSAppleEventDescriptor) {
+        guard let urlString = event.paramDescriptor(forKeyword: AEKeyword(keyDirectObject))?.stringValue,
+              let url = URL(string: urlString) else {
+            return
+        }
+        
+        print("🪄 Magic Link received: \(url)")
+        
+        // URL 格式: fetch-auth://login?cookie=...
+        guard url.scheme == "fetch-auth",
+              url.host == "login",
+              let components = URLComponents(url: url, resolvingAgainstBaseURL: true),
+              let cookieItem = components.queryItems?.first(where: { $0.name == "cookie" }),
+              let cookieValue = cookieItem.value?.removingPercentEncoding else {
+            print("⚠️ Invalid URL format")
+            return
+        }
+        
+        print("🍪 Cookie received, injecting...")
+        
+        // 注入 Cookie
+        GeminiWebManager.shared.injectRawCookies(cookieValue) {
+            print("✅ Magic login completed!")
+            
+            // 发送登录成功通知
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: NSNotification.Name("MagicLoginSuccess"), object: nil)
+                
+                // 激活 App 窗口
+                NSApp.activate(ignoringOtherApps: true)
+                
+                // 关闭登录窗口
+                BrowserWindowController.shared.hideWindow()
+            }
         }
     }
     
