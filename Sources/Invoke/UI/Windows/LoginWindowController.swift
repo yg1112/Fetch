@@ -80,38 +80,53 @@ class LoginWindowController: NSWindowController, WKNavigationDelegate, NSWindowD
         print("🌐 WebView setup complete. Ready to load.")
     }
     
+    private func clearCookiesAndCache(completion: @escaping () -> Void) {
+        let dataStore = WKWebsiteDataStore.default()
+        // 清理所有类型的缓存数据
+        let dataTypes = WKWebsiteDataStore.allWebsiteDataTypes()
+        let date = Date(timeIntervalSince1970: 0)
+        dataStore.removeData(ofTypes: dataTypes, modifiedSince: date) {
+            print("🧹 WebView cache and cookies cleared.")
+            completion()
+        }
+    }
+    
     func show() {
         self.hasTriggeredSuccess = false
         
-        // --- 核心修复：复活 WebView ---
-        // 如果 WebView 被移除了（superview 为 nil），重新添加到 contentView
-        if webView.superview == nil {
-            // 使用 Auto Layout 重新添加
-            if let contentView = self.window?.contentView {
-                contentView.addSubview(self.webView)
-                // 重新激活约束
-                NSLayoutConstraint.activate([
-                    self.webView.topAnchor.constraint(equalTo: contentView.topAnchor),
-                    self.webView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
-                    self.webView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
-                    self.webView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor)
-                ])
+        // 1. 先清理脏数据
+        clearCookiesAndCache { [weak self] in
+            guard let self = self else { return }
+            
+            // 2. 复活 WebView 逻辑 (保持不变)
+            if self.webView.superview == nil {
+                if let container = self.window?.contentView {
+                    container.addSubview(self.webView)
+                    self.webView.translatesAutoresizingMaskIntoConstraints = false
+                    NSLayoutConstraint.activate([
+                        self.webView.topAnchor.constraint(equalTo: container.topAnchor),
+                        self.webView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+                        self.webView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+                        self.webView.trailingAnchor.constraint(equalTo: container.trailingAnchor)
+                    ])
+                }
             }
+            
+            self.webView.navigationDelegate = self
+            
+            // 3. 窗口激活 (保持不变)
+            NSApp.setActivationPolicy(.regular)
+            NSApp.activate(ignoringOtherApps: true)
+            
+            self.showWindow(nil)
+            self.window?.makeKeyAndOrderFront(nil)
+            self.window?.level = .floating
+            
+            // 4. [关键策略] 使用 YouTube 跳板登录
+            // YouTube 的风控阈值较低，登录成功后 Cookie 是 Google 全域共享的
+            let youtubeLogin = URL(string: "https://accounts.google.com/ServiceLogin?service=youtube&continue=https://www.youtube.com")!
+            self.webView.load(URLRequest(url: youtubeLogin))
         }
-        
-        // 重新连接代理 (防止之前被 nil 掉)
-        webView.navigationDelegate = self
-        // ---------------------------
-        
-        NSApp.setActivationPolicy(.regular)
-        NSApp.activate(ignoringOtherApps: true)
-        
-        self.showWindow(nil)
-        self.window?.makeKeyAndOrderFront(nil)
-        self.window?.level = .floating
-        
-        let url = URL(string: "https://accounts.google.com/ServiceLogin?continue=https://gemini.google.com/app")!
-        webView.load(URLRequest(url: url))
     }
     
     // MARK: - Safe Teardown
@@ -156,15 +171,26 @@ class LoginWindowController: NSWindowController, WKNavigationDelegate, NSWindowD
             return
         }
         
-        if let url = navigationAction.request.url?.absoluteString,
-           url.contains("gemini.google.com/app") && !url.contains("signin") {
-            print("✅ Login success URL detected: \(url)")
-            
-            // 1. 必须先告诉 WebKit "取消本次导航" (因为我们要关闭了)
+        guard let urlStr = navigationAction.request.url?.absoluteString else {
+            decisionHandler(.allow)
+            return
+        }
+        
+        // 1. 检测是否登录成功并跳转到了 YouTube
+        if urlStr.contains("youtube.com") && !urlStr.contains("accounts.google") {
+            print("✅ YouTube Login Success! Redirecting to Gemini...")
             decisionHandler(.cancel)
             
-            // 2. 关键修复：将销毁逻辑放入异步队列
-            // 这允许当前的 WebKit 委托方法先安全退出栈帧，防止野指针崩溃
+            // 跳转到 Gemini
+            let geminiURL = URL(string: "https://gemini.google.com/app")!
+            webView.load(URLRequest(url: geminiURL))
+            return
+        }
+        
+        // 2. 检测是否最终到达 Gemini (登录完成)
+        if urlStr.contains("gemini.google.com/app") && !urlStr.contains("accounts.google") && !urlStr.contains("signin") {
+            print("🎉 Gemini Loaded! Safe teardown.")
+            decisionHandler(.cancel)
             DispatchQueue.main.async { [weak self] in
                 self?.handleLoginSuccess()
             }
