@@ -1,6 +1,7 @@
 import SwiftUI
 import Combine
 import AppKit
+import UserNotifications
 
 // MARK: - Models
 struct ChangeLog: Identifiable, Codable {
@@ -65,6 +66,7 @@ private let newFileStart = "<<<" + "FILE>>>"
 private let newFileEnd = "<<<" + "END>>>"
 
 init() {
+    setupNotifications()
     if !projectRoot.isEmpty {
         loadLogs()
         startListening()
@@ -310,8 +312,18 @@ private func restoreUserClipboardImmediately() {
 }
 
 private func setStatus(_ t: String, isBusy: Bool) { self.processingStatus = t; self.isProcessing = isBusy }
-private func showNotification(_ t: String, _ b: String) {
-    let n = NSUserNotification(); n.title = t; n.informativeText = b; NSUserNotificationCenter.default.deliver(n)
+
+// MARK: - Notifications
+private func setupNotifications() {
+    UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+}
+
+private func showNotification(_ title: String, _ body: String) {
+    let content = UNMutableNotificationContent()
+    content.title = title
+    content.body = body
+    let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
+    UNUserNotificationCenter.current().add(request)
 }
 
 private struct FilePayload { let path: String; let content: String }
