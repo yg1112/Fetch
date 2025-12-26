@@ -480,19 +480,27 @@ extension GeminiWebManager: WKScriptMessageHandler {
             let content = body["content"] as? String ?? ""
             let id = body["id"] as? String ?? ""
             
-            print("📥 Response received (id: \(id), length: \(content.count))")
-            
-            // ⚡️ 关键缝合：将响应同时交给 LinkLogic 处理文件写入
-            if !content.isEmpty {
-                print("⚡️ Forwarding API response to GeminiLinkLogic...")
-                GeminiLinkLogic.shared.processResponse(content)
-            }
+            print("🟣 [Swift Debug] WebManager received response. ID: \(id), Length: \(content.count)")
             
             DispatchQueue.main.async { [weak self] in
                 self?.isProcessing = false
                 self?.lastResponse = content
-                self?.responseCallback?(content)
-                self?.responseCallback = nil
+                
+                // Path 1: API Callback (Aider)
+                if let callback = self?.responseCallback {
+                    print("🟣 [Swift Debug] Returning content to API Callback (Aider)")
+                    callback(content)
+                    self?.responseCallback = nil
+                } else {
+                    print("⚠️ [Swift Debug] No API callback found! Aider might have timed out.")
+                }
+                
+                // Path 2: File System Bridge (The Missing Link)
+                if !content.isEmpty {
+                    print("⚡️ [Swift Debug] Bridging content to GeminiLinkLogic for parsing...")
+                    // 强制调用，不要加条件判断
+                    GeminiLinkLogic.shared.processResponse(content)
+                }
             }
             
         case "LOGIN_STATUS":
@@ -510,6 +518,10 @@ extension GeminiWebManager: WKScriptMessageHandler {
         case "STATUS":
             let status = body["status"] as? String ?? ""
             print("📊 Bridge Status: \(status)")
+            
+        case "LOG":
+            let message = body["message"] as? String ?? ""
+            print("[JS Debug] \(message)")
             
         default:
             print("⚠️ Unknown message type: \(type)")
@@ -628,6 +640,11 @@ extension GeminiWebManager {
                                    .replace(/^\\s*Thinking\\s*$/gim, '');
                         text = text.trim();
                     }
+                    
+                    // Step 1: JS 侧"造影剂"埋点
+                    const debugSummary = text.substring(0, 100).replace(/\\n/g, '\\\\n');
+                    console.log(`[JS Debug] Scraped content length: ${text.length}, Preview: ${debugSummary}`);
+                    self.postToSwift({ type: 'LOG', message: `JS Scraped: ${text.length} chars. Start: ${debugSummary}` });
                     
                     // 如果仍然没有找到，记录调试信息
                     if (!text || text.length === 0) {

@@ -207,6 +207,8 @@ class LocalAPIServer: ObservableObject {
             do {
                 let response = try await GeminiWebManager.shared.askGemini(prompt: prompt)
                 
+                print("🟢 [API Debug] Sending response to Aider. Length: \(response.count)")
+                
                 if stream {
                     self.sendStreamResponse(connection, content: response, model: model)
                 } else {

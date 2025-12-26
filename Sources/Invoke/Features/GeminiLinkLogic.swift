@@ -128,6 +128,7 @@ class GeminiLinkLogic: ObservableObject {
     }
     
     func processResponse(_ rawText: String) {
+        print("🔵 [Logic Debug] processResponse called. Input length: \(rawText.count)")
         restoreUserClipboardImmediately()
         setStatus("Processing...", isBusy: true)
         
@@ -139,6 +140,11 @@ class GeminiLinkLogic: ObservableObject {
             
             // ⚠️ 关键修改：直接使用 rawText，不再调用 sanitizeContent，以免破坏 Markdown 结构
             let files = self.parseFiles(rawText)
+            print("🔵 [Logic Debug] Parser found \(files.count) files.")
+            if files.isEmpty {
+                print("❌ [Logic Debug] PARSE FAILED. Dumping raw text snippet for regex check:")
+                print(rawText.prefix(300))
+            }
             
             var modified: Set<String> = []
             for f in files {
