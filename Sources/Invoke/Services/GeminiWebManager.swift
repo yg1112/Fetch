@@ -14,8 +14,8 @@ class InteractiveWebView: WKWebView {
     override func becomeFirstResponder() -> Bool { return true }
 }
 
-/// Native Gemini Bridge - v14.0 (Headless Stable & Complete)
-/// 纯后台 JS 注入架构，彻底解决主线程死锁问题
+/// Native Gemini Bridge - v15.0 (Serialized & Robust)
+/// 纯后台 JS 注入架构，彻底解决主线程死锁问题，增加请求队列防止并发崩溃
 @MainActor
 class GeminiWebManager: NSObject, ObservableObject {
     static let shared = GeminiWebManager()
@@ -29,8 +29,17 @@ class GeminiWebManager: NSObject, ObservableObject {
     
     // MARK: - Internal
     private(set) var webView: WKWebView!
-    private var pendingPromptId: String?
     private var responseCallback: ((String) -> Void)?
+    
+    // 请求队列结构
+    private struct PendingRequest {
+        let prompt: String
+        let model: String
+        let continuation: CheckedContinuation<String, Error>
+    }
+    
+    private var requestStream: AsyncStream<PendingRequest>.Continuation?
+    private var requestTask: Task<Void, Never>?
     
     // 使用最新 macOS Safari UA
     public static let userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15"
@@ -38,6 +47,46 @@ class GeminiWebManager: NSObject, ObservableObject {
     override init() {
         super.init()
         setupWebView()
+        startRequestLoop()
+    }
+    
+    deinit {
+        requestTask?.cancel()
+    }
+
+    // MARK: - Queue Management
+    
+    private func startRequestLoop() {
+        let (stream, continuation) = AsyncStream<PendingRequest>.makeStream()
+        self.requestStream = continuation
+        
+        self.requestTask = Task {
+            for await request in stream {
+                // 确保 Web 环境就绪
+                if !self.isReady {
+                    // 简单的重试等待逻辑
+                    try? await Task.sleep(nanoseconds: 2 * 1_000_000_000)
+                }
+                
+                if !self.isReady || !self.isLoggedIn {
+                    request.continuation.resume(throwing: GeminiError.notReady)
+                    continue
+                }
+                
+                do {
+                    let response = try await self.performActualNetworkRequest(request.prompt, model: request.model)
+                    request.continuation.resume(returning: response)
+                } catch {
+                    print("❌ Request failed: \(error.localizedDescription)")
+                    // 如果是超时，尝试刷新页面恢复
+                    if let err = error as? GeminiError, case .timeout = err {
+                        print("🔄 Timeout detected, reloading page...")
+                        await self.reloadPageAsync()
+                    }
+                    request.continuation.resume(throwing: error)
+                }
+            }
+        }
     }
     
     // MARK: - Setup
@@ -90,30 +139,65 @@ class GeminiWebManager: NSObject, ObservableObject {
         }
     }
     
-    // MARK: - Headless Messaging
-    
-    /// 发送 Prompt (无窗口焦点竞争，线程安全)
-    func sendPrompt(_ text: String, model: String = "default", completion: @escaping (String) -> Void) {
-        if isProcessing {
-            print("⚠️ Interrupting previous request.")
+    private func reloadPageAsync() async {
+        return await withCheckedContinuation { continuation in
+            DispatchQueue.main.async {
+                self.reloadPage()
+                // 简单延迟等待加载，或者等待 didFinish
+                DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
+                    continuation.resume()
+                }
+            }
         }
-        
-        isProcessing = true
-        pendingPromptId = UUID().uuidString
-        responseCallback = completion
-        
-        // 转义字符，防止 JS 注入错误
-        let escapedText = text.replacingOccurrences(of: "\\", with: "\\\\")
-                              .replacingOccurrences(of: "\"", with: "\\\"")
-                              .replacingOccurrences(of: "\n", with: "\\n")
-        
-        // 直接调用 JS 函数
-        let js = "window.__fetchBridge.sendPrompt(\"\(escapedText)\", \"\(pendingPromptId!)\");"
-        
-        webView.evaluateJavaScript(js) { [weak self] result, error in
-            if let error = error {
-                print("❌ JS Injection Failed: \(error)")
-                self?.handleError("Failed to send prompt: \(error.localizedDescription)")
+    }
+    
+    // MARK: - Async / Await API (Public)
+    
+    func askGemini(prompt: String, model: String = "default") async throws -> String {
+        return try await withCheckedThrowingContinuation { continuation in
+            let req = PendingRequest(prompt: prompt, model: model, continuation: continuation)
+            if let stream = self.requestStream {
+                stream.yield(req)
+            } else {
+                continuation.resume(throwing: GeminiError.systemError("Request stream not initialized"))
+            }
+        }
+    }
+    
+    // MARK: - Internal Execution
+    
+    private func performActualNetworkRequest(_ text: String, model: String) async throws -> String {
+        return try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.main.async {
+                self.isProcessing = true
+                let promptId = UUID().uuidString
+                
+                // 设置一次性回调
+                self.responseCallback = { response in
+                    self.isProcessing = false
+                    if response.hasPrefix("Error: Timeout") {
+                         continuation.resume(throwing: GeminiError.timeout)
+                    } else if response.hasPrefix("Error:") {
+                        continuation.resume(throwing: GeminiError.responseError(response))
+                    } else {
+                        continuation.resume(returning: response)
+                    }
+                }
+                
+                // 转义字符，防止 JS 注入错误
+                let escapedText = text.replacingOccurrences(of: "\\", with: "\\\\")
+                                      .replacingOccurrences(of: "\"", with: "\\\"")
+                                      .replacingOccurrences(of: "\n", with: "\\n")
+                
+                // 直接调用 JS 函数
+                let js = "window.__fetchBridge.sendPrompt(\"\(escapedText)\", \"\(promptId)\");"
+                
+                self.webView.evaluateJavaScript(js) { [weak self] result, error in
+                    if let error = error {
+                        print("❌ JS Injection Failed: \(error)")
+                        self?.handleError("Failed to send prompt: \(error.localizedDescription)")
+                    }
+                }
             }
         }
     }
@@ -126,35 +210,18 @@ class GeminiWebManager: NSObject, ObservableObject {
         }
     }
     
-    // MARK: - Async / Await API
-    
-    func askGemini(prompt: String, model: String = "default") async throws -> String {
-        return try await withCheckedThrowingContinuation { continuation in
-            guard self.isReady && self.isLoggedIn else {
-                continuation.resume(throwing: GeminiError.notReady)
-                return
-            }
-            
-            DispatchQueue.main.async { [weak self] in
-                self?.sendPrompt(prompt, model: model) { response in
-                    if response.hasPrefix("Error:") {
-                        continuation.resume(throwing: GeminiError.responseError(response))
-                    } else {
-                        continuation.resume(returning: response)
-                    }
-                }
-            }
-        }
-    }
-    
     enum GeminiError: LocalizedError {
         case notReady
+        case timeout
         case responseError(String)
+        case systemError(String)
         
         var errorDescription: String? {
             switch self {
             case .notReady: return "Gemini WebView not ready or not logged in"
+            case .timeout: return "Request timed out"
             case .responseError(let msg): return msg
+            case .systemError(let msg): return msg
             }
         }
     }
@@ -282,19 +349,21 @@ extension GeminiWebManager: WKNavigationDelegate, WKScriptMessageHandler {
             DispatchQueue.main.async { [weak self] in
                 guard let self = self else { return }
                 
-                self.isProcessing = false
-                self.lastResponse = content
+                // 这里不再直接处理 isProcessing，而是交给 callback 处理
+                // 只有当有回调时才处理，避免无关消息
                 
-                if content.isEmpty {
-                    self.responseCallback?("Error: Empty response from Gemini.")
-                } else {
-                    self.responseCallback?(content)
+                if let callback = self.responseCallback {
+                    self.lastResponse = content
+                    if content.isEmpty {
+                        callback("Error: Empty response from Gemini.")
+                    } else {
+                        callback(content)
+                    }
+                    self.responseCallback = nil
                 }
                 
-                self.responseCallback = nil
-                
-                // 触发 Vibe Coding 逻辑
-                if !content.isEmpty {
+                // 触发 Vibe Coding 逻辑 (保持原有功能)
+                if !content.isEmpty && !content.hasPrefix("Error:") {
                     Task {
                         await GeminiLinkLogic.shared.processResponse(content)
                     }
@@ -335,11 +404,10 @@ extension GeminiWebManager {
     
     static let injectedScript = """
     (function() {
-        console.log("🚀 Bridge v14 (Headless) Initializing...");
+        console.log("🚀 Bridge v15 (Headless/Queue) Initializing...");
         
         window.__fetchBridge = {
             sendPrompt: function(text, id) {
-                // 1. 查找输入框
                 const input = document.querySelector('div[contenteditable="true"]');
                 if (!input) {
                     console.error("Input not found");
@@ -347,22 +415,17 @@ extension GeminiWebManager {
                     return;
                 }
                 
-                // 2. 模拟输入 (Headless 安全方式)
                 input.focus();
-                // 清空
                 document.execCommand('selectAll', false, null);
                 document.execCommand('delete', false, null);
-                // 插入文本
                 document.execCommand('insertText', false, text);
                 
-                // 3. 点击发送
                 setTimeout(() => {
                     const sendBtn = document.querySelector('button[aria-label*="Send"], button[class*="send-button"]');
                     if (sendBtn) {
                         sendBtn.click();
                         this.waitForResponse(id);
                     } else {
-                        // 回车发送 Fallback
                         const enter = new KeyboardEvent('keydown', { bubbles: true, cancelable: true, keyCode: 13, key: 'Enter' });
                         input.dispatchEvent(enter);
                         this.waitForResponse(id);
@@ -376,7 +439,6 @@ extension GeminiWebManager {
                 let silenceTimer = null;
                 const startTime = Date.now();
                 
-                // 噪音过滤器
                 const isNoise = (text) => {
                     if (!text) return true;
                     const t = text.toLowerCase();
@@ -402,7 +464,6 @@ extension GeminiWebManager {
                     observer.disconnect();
                     let text = "";
                     
-                    // 查找最新的回复
                     const selectors = ['.model-response', '.message-content', 'div[role="textbox"]'];
                     for (const sel of selectors) {
                         const els = document.querySelectorAll(sel);
@@ -427,7 +488,6 @@ extension GeminiWebManager {
                 
                 observer.observe(document.body, { childList: true, subtree: true, characterData: true });
                 
-                // 超时保护
                 setTimeout(() => { 
                     observer.disconnect(); 
                     if (hasStarted) finish(); else finish('timeout');

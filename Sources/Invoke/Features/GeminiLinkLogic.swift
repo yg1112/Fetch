@@ -58,7 +58,10 @@ class GeminiLinkLogic: ObservableObject {
     private var lastChangeCount: Int = 0
     private var lastUserClipboard: String = ""
     
-    // 🛡️ Protocol V3 Definition - 使用!!!标记，更安全可靠
+    // 串行写入队列，防止多线程写入冲突
+    private let fileWriteQueue = DispatchQueue(label: "com.fetch.filewriter", qos: .userInitiated)
+    
+    // 🛡️ Protocol V3 Definition
     private let magicTrigger = ">>> INVOKE"
     private let tagFileStart = "!!!FILE_START!!!"
     private let tagFileEnd = "!!!FILE_END!!!"
@@ -91,13 +94,11 @@ class GeminiLinkLogic: ObservableObject {
         lastChangeCount = pasteboard.changeCount
         if let content = pasteboard.string(forType: .string) { lastUserClipboard = content }
         
-        // 确保 Timer 在主线程的 RunLoop 上运行
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             self.timer = Timer.scheduledTimer(withTimeInterval: 0.8, repeats: true) { [weak self] _ in
                 self?.checkClipboard()
             }
-            // 添加到主 RunLoop 确保即使 App 在后台也能运行
             RunLoop.main.add(self.timer!, forMode: .common)
             print("👂 Listening started... (Timer on main RunLoop)")
         }
@@ -108,8 +109,6 @@ class GeminiLinkLogic: ObservableObject {
         lastChangeCount = pasteboard.changeCount
         guard let content = pasteboard.string(forType: .string) else { return }
         
-        print("📋 Clipboard Changed. Content length: \(content.count)")
-        
         // 🛑 Ignore System Prompts to prevent loops
         let ignoreSig = "[System Instruction: " + "Fetch Protocol]"
         if content.contains(ignoreSig) { return }
@@ -118,40 +117,37 @@ class GeminiLinkLogic: ObservableObject {
         // 🔒 Trigger Check
         if content.contains(magicTrigger) {
             print("✅ Detected Trigger '>>> INVOKE'")
-            print("📄 Raw Content Snippet: \(content.prefix(100))...")
-            print("⚡️ Detected >>> INVOKE trigger via Clipboard")
             processResponse(content)
         } else {
-            // Only backup user clipboard if it's NOT code intended for us
             if !content.contains(tagFileStart) { lastUserClipboard = content }
         }
     }
     
-    // 🔥 PUBLIC API for WebManager & Clipboard (Renamed from processAllChanges)
+    // 🔥 PUBLIC API
     func processResponse(_ rawText: String) {
-        // API调用时不恢复剪贴板，以免干扰用户
-        // restoreUserClipboardImmediately()
-        
         setStatus("Processing...", isBusy: true)
         print("🔵 [Logic Debug] processResponse called. Input length: \(rawText.count)")
         
+        // 解析放在后台
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
             
-            // ⚠️ 关键修改：直接使用 rawText，不调用 sanitizeContent，以免破坏 Markdown 结构
             let files = self.parseFiles(rawText)
             
             if files.isEmpty {
-                print("⚠️ No files parsed! Dumping snippet:")
-                print(rawText.prefix(300))
+                print("⚠️ No files parsed!")
             } else {
                 print("✅ Parsed \(files.count) files.")
             }
             
             var modified: Set<String> = []
-            for f in files {
-                if self.writeFile(f.path, f.content) {
-                    modified.insert(f.path)
+            
+            // 写入操作改为串行同步，确保原子性
+            self.fileWriteQueue.sync {
+                for f in files {
+                    if self.writeFile(f.path, f.content) {
+                        modified.insert(f.path)
+                    }
                 }
             }
             
@@ -159,13 +155,11 @@ class GeminiLinkLogic: ObservableObject {
         }
     }
     
-    // 🔥 Universal Parser: Supports V3, Markdown, and V2(XML)
+    // 🔥 Universal Parser
     private func parseFiles(_ text: String) -> [FilePayload] {
         var payloads: [FilePayload] = []
         
-        // ----------------------------------------------------
-        // Strategy A: Protocol V3 (!!!FILE_START!!!)
-        // ----------------------------------------------------
+        // Strategy A: Protocol V3
         let v3Pattern = "!!!FILE_START!!!\\s+([^\\n]+)\\n(.*?)\\n!!!FILE_END!!!"
         if let v3Regex = try? NSRegularExpression(pattern: v3Pattern, options: [.dotMatchesLineSeparators]) {
             let matches = v3Regex.matches(in: text, range: NSRange(text.startIndex..<text.endIndex, in: text))
@@ -174,14 +168,10 @@ class GeminiLinkLogic: ObservableObject {
                       let rContent = Range(m.range(at: 2), in: text) else { return nil }
                 return FilePayload(path: String(text[rPath]).trimmingCharacters(in: .whitespacesAndNewlines), content: String(text[rContent]))
             }
-            if !v3Files.isEmpty { print("🔹 Found \(v3Files.count) V3 Protocol files") }
             payloads.append(contentsOf: v3Files)
         }
         
-        // ----------------------------------------------------
-        // Strategy B: Aider Markdown (```filepath:...)
-        // ----------------------------------------------------
-        // Regex matches: ```filepath: path/to/file \n content \n ```
+        // Strategy B: Markdown
         let mdPattern = "```filepath:\\s*([^\\n]+)\\n(.*?)\\n```"
         if let mdRegex = try? NSRegularExpression(pattern: mdPattern, options: [.dotMatchesLineSeparators]) {
             let matches = mdRegex.matches(in: text, range: NSRange(text.startIndex..<text.endIndex, in: text))
@@ -190,13 +180,10 @@ class GeminiLinkLogic: ObservableObject {
                       let rContent = Range(m.range(at: 2), in: text) else { return nil }
                 return FilePayload(path: String(text[rPath]).trimmingCharacters(in: .whitespacesAndNewlines), content: String(text[rContent]))
             }
-            if !mdFiles.isEmpty { print("🔹 Found \(mdFiles.count) Markdown files") }
             payloads.append(contentsOf: mdFiles)
         }
         
-        // ----------------------------------------------------
-        // Strategy C: Protocol V2 (XML) - Fallback
-        // ----------------------------------------------------
+        // Strategy C: Protocol V2 (Fallback)
         let v2Pattern = "<FILE_CONTENT\\s+path=\"([^\"]+)\"\\s*>(.*?)</FILE_CONTENT>"
         if let v2Regex = try? NSRegularExpression(pattern: v2Pattern, options: [.dotMatchesLineSeparators]) {
             let matches = v2Regex.matches(in: text, range: NSRange(text.startIndex..<text.endIndex, in: text))
@@ -205,22 +192,10 @@ class GeminiLinkLogic: ObservableObject {
                       let rContent = Range(m.range(at: 2), in: text) else { return nil }
                 return FilePayload(path: String(text[rPath]), content: String(text[rContent]).trimmingCharacters(in: .newlines))
             }
-            if !v2Files.isEmpty { print("🔹 Found \(v2Files.count) XML files") }
             payloads.append(contentsOf: v2Files)
         }
         
-        print("🔍 Universal Parser found \(payloads.count) files.")
         return payloads
-    }
-    
-    // Legacy function - kept but unused in processResponse
-    private func sanitizeContent(_ text: String) -> String {
-        var t = text
-        if t.contains("```") {
-            t = t.replacingOccurrences(of: "(?m)^```\\w*$", with: "", options: .regularExpression)
-            t = t.replacingOccurrences(of: "(?m)^```$", with: "", options: .regularExpression)
-        }
-        return t
     }
     
     private func writeFile(_ path: String, _ content: String) -> Bool {
@@ -228,7 +203,6 @@ class GeminiLinkLogic: ObservableObject {
         do {
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             
-            // 本地预验证: 如果是Swift文件，先检查语法
             if path.hasSuffix(".swift") {
                 if !validateSwiftFile(content: content, path: path) {
                     print("⚠️ Swift validation failed for \(path), skipping write")
@@ -245,9 +219,7 @@ class GeminiLinkLogic: ObservableObject {
         }
     }
     
-    /// 本地预验证: 检查Swift文件语法
     private func validateSwiftFile(content: String, path: String) -> Bool {
-        // 创建临时文件
         let tempDir = FileManager.default.temporaryDirectory
         let tempFile = tempDir.appendingPathComponent("\(UUID().uuidString).swift")
         
@@ -255,11 +227,8 @@ class GeminiLinkLogic: ObservableObject {
             return false
         }
         
-        defer {
-            try? FileManager.default.removeItem(at: tempFile)
-        }
+        defer { try? FileManager.default.removeItem(at: tempFile) }
         
-        // 运行swiftc语法检查
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/bin/swiftc")
         task.arguments = ["-typecheck", tempFile.path]
@@ -269,20 +238,8 @@ class GeminiLinkLogic: ObservableObject {
         do {
             try task.run()
             task.waitUntilExit()
-            
-            if task.terminationStatus != 0 {
-                let errorPipe = task.standardError as! Pipe
-                let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
-                if let errorOutput = String(data: errorData, encoding: .utf8) {
-                    print("❌ Swift validation error for \(path):")
-                    print(errorOutput)
-                }
-                return false
-            }
-            return true
+            return task.terminationStatus == 0
         } catch {
-            print("⚠️ Validation check failed: \(error)")
-            // 如果检查工具不可用，允许写入（降级处理）
             return true
         }
     }
@@ -294,14 +251,12 @@ class GeminiLinkLogic: ObservableObject {
                 return 
             }
             
-            // 最终验证: 运行项目编译检查
             self.setStatus("Running build check...", isBusy: true)
             self.validateProjectBuild { [weak self] isValid in
                 guard let self = self else { return }
                 
                 if !isValid {
                     self.setStatus("Build failed - changes rejected", isBusy: false)
-                    // 将错误信息反馈给Gemini
                     self.sendBuildErrorToGemini()
                     return
                 }
@@ -313,7 +268,6 @@ class GeminiLinkLogic: ObservableObject {
         }
     }
     
-    /// 验证项目编译
     private func validateProjectBuild(completion: @escaping (Bool) -> Void) {
         DispatchQueue.global().async {
             let task = Process()
@@ -326,27 +280,13 @@ class GeminiLinkLogic: ObservableObject {
             do {
                 try task.run()
                 task.waitUntilExit()
-                
-                if task.terminationStatus != 0 {
-                    let errorPipe = task.standardError as! Pipe
-                    let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
-                    if let errorOutput = String(data: errorData, encoding: .utf8) {
-                        print("❌ Build failed:")
-                        print(errorOutput)
-                    }
-                    completion(false)
-                } else {
-                    completion(true)
-                }
+                completion(task.terminationStatus == 0)
             } catch {
-                print("⚠️ Build check unavailable: \(error)")
-                // 如果swift build不可用，允许继续（降级处理）
                 completion(true)
             }
         }
     }
     
-    /// 将编译错误发送给Gemini修复
     private func sendBuildErrorToGemini() {
         DispatchQueue.global().async {
             let task = Process()
@@ -408,7 +348,6 @@ class GeminiLinkLogic: ObservableObject {
     
     // MARK: - User Facing
     
-    /// Generates the NEW Protocol V3 System Prompt
     func copyGemSetupGuide() {
         let header = "[System Instruction: Fetch Protocol v3]"
         
@@ -432,19 +371,6 @@ class GeminiLinkLogic: ObservableObject {
         5. If you use Markdown code blocks (```), ensure they are OUTSIDE the !!! tags.
         6. Do not truncate code. The executor cannot "fill in the rest".
         7. Each file must be complete and valid.
-        
-        --- EXAMPLE ---
-        >>> INVOKE
-        !!!FILE_START!!!
-        Sources/Example.swift
-        import Foundation
-        
-        class Example {
-            func hello() {
-                print("Hello")
-            }
-        }
-        !!!FILE_END!!!
         """
         
         pasteboard.clearContents()
@@ -488,16 +414,6 @@ class GeminiLinkLogic: ObservableObject {
                     self.changeLogs.remove(at: index)
                     self.saveLogs()
                 }
-            }
-        }
-    }
-    
-    private func restoreUserClipboardImmediately() {
-        if !lastUserClipboard.isEmpty {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                self.pasteboard.clearContents()
-                self.pasteboard.setString(self.lastUserClipboard, forType: .string)
-                self.lastChangeCount = self.pasteboard.changeCount
             }
         }
     }
