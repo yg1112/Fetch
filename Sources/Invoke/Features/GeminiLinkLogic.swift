@@ -422,6 +422,7 @@ class GeminiLinkLogic: ObservableObject {
     
     // MARK: - Notifications
     private func setupNotifications() {
+        guard Bundle.main.bundleIdentifier != nil else { print("⚠️ Debug Mode: Skipping notifications"); return }
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
     }
     
