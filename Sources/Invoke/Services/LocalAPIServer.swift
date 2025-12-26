@@ -1,6 +1,25 @@
 import Foundation
 import Network
 
+// MARK: - Debug Logger
+extension LocalAPIServer {
+    static func debugLog(_ message: String) {
+        let logMessage = "[API Debug] \(message)"
+        print(logMessage)
+        // 同时写入文件
+        let logFile = FileManager.default.temporaryDirectory.appendingPathComponent("fetch_debug.log")
+        if let data = (logMessage + "\n").data(using: .utf8) {
+            if let fileHandle = try? FileHandle(forWritingTo: logFile) {
+                fileHandle.seekToEndOfFile()
+                fileHandle.write(data)
+                fileHandle.closeFile()
+            } else {
+                try? data.write(to: logFile)
+            }
+        }
+    }
+}
+
 /// 本地 OpenAI 兼容 API 服务器
 /// Aider CLI -> localhost:3000 -> Fetch -> Gemini WebView
 class LocalAPIServer: ObservableObject {
@@ -207,7 +226,7 @@ class LocalAPIServer: ObservableObject {
             do {
                 let response = try await GeminiWebManager.shared.askGemini(prompt: prompt)
                 
-                print("🟢 [API Debug] Sending response to Aider. Length: \(response.count)")
+                Self.debugLog("🟢 [API Debug] Sending response to Aider. Length: \(response.count)")
                 
                 if stream {
                     self.sendStreamResponse(connection, content: response, model: model)

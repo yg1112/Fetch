@@ -3,6 +3,25 @@ import Combine
 import AppKit
 import UserNotifications
 
+// MARK: - Debug Logger
+extension GeminiLinkLogic {
+    static func debugLog(_ message: String) {
+        let logMessage = "[Logic Debug] \(message)"
+        print(logMessage)
+        // 同时写入文件
+        let logFile = FileManager.default.temporaryDirectory.appendingPathComponent("fetch_debug.log")
+        if let data = (logMessage + "\n").data(using: .utf8) {
+            if let fileHandle = try? FileHandle(forWritingTo: logFile) {
+                fileHandle.seekToEndOfFile()
+                fileHandle.write(data)
+                fileHandle.closeFile()
+            } else {
+                try? data.write(to: logFile)
+            }
+        }
+    }
+}
+
 // MARK: - Models
 struct ChangeLog: Identifiable, Codable {
     var id: String { commitHash }
@@ -128,7 +147,7 @@ class GeminiLinkLogic: ObservableObject {
     }
     
     func processResponse(_ rawText: String) {
-        print("🔵 [Logic Debug] processResponse called. Input length: \(rawText.count)")
+        Self.debugLog("🔵 [Logic Debug] processResponse called. Input length: \(rawText.count)")
         restoreUserClipboardImmediately()
         setStatus("Processing...", isBusy: true)
         
@@ -140,10 +159,10 @@ class GeminiLinkLogic: ObservableObject {
             
             // ⚠️ 关键修改：直接使用 rawText，不再调用 sanitizeContent，以免破坏 Markdown 结构
             let files = self.parseFiles(rawText)
-            print("🔵 [Logic Debug] Parser found \(files.count) files.")
+            Self.debugLog("🔵 [Logic Debug] Parser found \(files.count) files.")
             if files.isEmpty {
-                print("❌ [Logic Debug] PARSE FAILED. Dumping raw text snippet for regex check:")
-                print(rawText.prefix(300))
+                Self.debugLog("❌ [Logic Debug] PARSE FAILED. Dumping raw text snippet for regex check:")
+                Self.debugLog(String(rawText.prefix(300)))
             }
             
             var modified: Set<String> = []
