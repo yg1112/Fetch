@@ -134,11 +134,10 @@ class GeminiLinkLogic: ObservableObject {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
             
-            // 1. Use raw text directly - parser needs to handle all formats
-            var modified: Set<String> = []
-            
-            // 2. Parse Files (V3, V2, and Aider Markdown)
+            // ⚠️ 关键修改：直接使用 rawText，不再调用 sanitizeContent，以免破坏 Markdown 结构
             let files = self.parseFiles(rawText)
+            
+            var modified: Set<String> = []
             for f in files {
                 if self.writeFile(f.path, f.content) {
                     modified.insert(f.path)
@@ -149,86 +148,51 @@ class GeminiLinkLogic: ObservableObject {
         }
     }
     
-    // 🔥 Core Parser for V2, V3 & Aider Markdown Protocol
+    // 🔥 Universal Parser: Supports V3, Markdown, and V2(XML)
     private func parseFiles(_ text: String) -> [FilePayload] {
         var payloads: [FilePayload] = []
         
-        print("🔍 Trying to parse Protocol V3...")
-        
         // ----------------------------------------------------
-        // Strategy A: Protocol V3 (!!!FILE_START!!!) - PREFERRED
+        // Strategy A: Protocol V3 (!!!FILE_START!!!)
         // ----------------------------------------------------
-        // Regex: !!!FILE_START!!! path/to/file [newline] content [newline] !!!FILE_END!!!
         let v3Pattern = "!!!FILE_START!!!\\s+([^\\n]+)\\n(.*?)\\n!!!FILE_END!!!"
         if let v3Regex = try? NSRegularExpression(pattern: v3Pattern, options: [.dotMatchesLineSeparators]) {
             let matches = v3Regex.matches(in: text, range: NSRange(text.startIndex..<text.endIndex, in: text))
-            
-            print("📊 V3 Matches Found: \(matches.count)")
-            
-            if matches.count == 0 {
-                print("⚠️ V3 Regex Failed. checking if content contains tags...")
-                if text.contains("!!!FILE_START!!!") {
-                    print("❗ Text HAS tags but Regex failed. Check newlines.")
-                    print("📝 Content snippet around tags: \(text.components(separatedBy: "!!!FILE_START!!!").dropFirst().first?.prefix(200) ?? "N/A")")
-                }
-            }
-            
-            let v3Payloads = matches.compactMap { m -> FilePayload? in
+            payloads.append(contentsOf: matches.compactMap { m -> FilePayload? in
                 guard let rPath = Range(m.range(at: 1), in: text),
                       let rContent = Range(m.range(at: 2), in: text) else { return nil }
-                
-                let path = String(text[rPath]).trimmingCharacters(in: .whitespacesAndNewlines)
-                let content = String(text[rContent])
-                print("✅ Parsed V3 file: \(path) (content length: \(content.count))")
-                return FilePayload(path: path, content: content)
-            }
-            payloads.append(contentsOf: v3Payloads)
+                return FilePayload(path: String(text[rPath]).trimmingCharacters(in: .whitespacesAndNewlines), content: String(text[rContent]))
+            })
         }
         
         // ----------------------------------------------------
-        // Strategy B: Protocol V2 (XML) - FALLBACK
+        // Strategy B: Aider Markdown (```filepath:...)
         // ----------------------------------------------------
-        // Regex: <FILE_CONTENT path="..."> ... </FILE_CONTENT>
+        // Regex matches: ```filepath: path/to/file \n content \n ```
+        let mdPattern = "```filepath:\\s*([^\\n]+)\\n(.*?)\\n```"
+        if let mdRegex = try? NSRegularExpression(pattern: mdPattern, options: [.dotMatchesLineSeparators]) {
+            let matches = mdRegex.matches(in: text, range: NSRange(text.startIndex..<text.endIndex, in: text))
+            payloads.append(contentsOf: matches.compactMap { m -> FilePayload? in
+                guard let rPath = Range(m.range(at: 1), in: text),
+                      let rContent = Range(m.range(at: 2), in: text) else { return nil }
+                return FilePayload(path: String(text[rPath]).trimmingCharacters(in: .whitespacesAndNewlines), content: String(text[rContent]))
+            })
+        }
+        
+        // ----------------------------------------------------
+        // Strategy C: Protocol V2 (XML) - Fallback
+        // ----------------------------------------------------
         let v2Pattern = "<FILE_CONTENT\\s+path=\"([^\"]+)\"\\s*>(.*?)</FILE_CONTENT>"
         if let v2Regex = try? NSRegularExpression(pattern: v2Pattern, options: [.dotMatchesLineSeparators]) {
             let matches = v2Regex.matches(in: text, range: NSRange(text.startIndex..<text.endIndex, in: text))
-            
-            let v2Payloads = matches.compactMap { m -> FilePayload? in
+            payloads.append(contentsOf: matches.compactMap { m -> FilePayload? in
                 guard let rPath = Range(m.range(at: 1), in: text),
                       let rContent = Range(m.range(at: 2), in: text) else { return nil }
-                
-                let path = String(text[rPath])
-                // V2 often has extra newlines due to XML tags, so we trim them
-                let content = String(text[rContent]).trimmingCharacters(in: .newlines)
-                return FilePayload(path: path, content: content)
-            }
-            payloads.append(contentsOf: v2Payloads)
+                return FilePayload(path: String(text[rPath]), content: String(text[rContent]).trimmingCharacters(in: .newlines))
+            })
         }
         
-        // ----------------------------------------------------
-        // Strategy C: Aider Markdown (```filepath:...)
-        // ----------------------------------------------------
-        // Regex: ```filepath:path/to/file.ext\ncontent\n```
-        let markdownPattern = "```filepath:\\s*([^\\n]+)\\n(.*?)\\n```"
-        if let mdRegex = try? NSRegularExpression(pattern: markdownPattern, options: [.dotMatchesLineSeparators]) {
-            let matches = mdRegex.matches(in: text, range: NSRange(text.startIndex..<text.endIndex, in: text))
-            
-            let mdPayloads = matches.compactMap { m -> FilePayload? in
-                guard let rPath = Range(m.range(at: 1), in: text),
-                      let rContent = Range(m.range(at: 2), in: text) else { return nil }
-                
-                let path = String(text[rPath]).trimmingCharacters(in: .whitespacesAndNewlines)
-                let content = String(text[rContent])
-                print("✅ Parsed Aider Markdown file: \(path) (content length: \(content.count))")
-                return FilePayload(path: path, content: content)
-            }
-            payloads.append(contentsOf: mdPayloads)
-            if !mdPayloads.isEmpty {
-                print("✅ Parsed Aider Markdown: \(mdPayloads.count) files")
-            }
-        }
-        
-        print("🔍 Parsed \(payloads.count) files (V3+V2+Markdown mixed)")
+        print("🔍 Universal Parser found \(payloads.count) files.")
         return payloads
     }
     
