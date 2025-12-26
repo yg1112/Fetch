@@ -13,11 +13,11 @@ class InteractiveWebView: WKWebView {
     override func becomeFirstResponder() -> Bool { return true }
 }
 
-/// Native Gemini Bridge - v22.0 (Strict Selector & Anti-Ghost)
+/// Native Gemini Bridge - v23.0 (Strict State-Sync)
 /// 修复核心：
-/// 1. 移除 .message-content Fallback，杜绝抓取到用户气泡（解决"重复回复"）。
-/// 2. 优化重试逻辑，防止"第三个你好"。
-/// 3. 增加对 Aider 内部指令的静默处理。
+/// 1. 发送验证：3秒后检查用户气泡是否增加，快速失败。
+/// 2. 严格抓取：forceFinish 必须检查是否有新内容，否则返回错误。
+/// 3. 防止旧话重提：extractStrict 检查数量，杜绝抓取旧气泡。
 @MainActor
 class GeminiWebManager: NSObject, ObservableObject {
     static let shared = GeminiWebManager()
@@ -102,7 +102,7 @@ class GeminiWebManager: NSObject, ObservableObject {
             styleMask: [.titled, .closable, .resizable, .miniaturizable],
             backing: .buffered, defer: false
         )
-        debugWindow?.title = "Fetch Debugger (v22 Strict)"
+        debugWindow?.title = "Fetch Debugger (v23 Strict State-Sync)"
         debugWindow?.contentView = webView
         debugWindow?.makeKeyAndOrderFront(nil)
         debugWindow?.level = .floating 
@@ -258,7 +258,7 @@ extension GeminiWebManager: WKNavigationDelegate, WKScriptMessageHandler {
     }
 }
 
-// MARK: - Injected Scripts (V22 - The Silencer)
+// MARK: - Injected Scripts (V23 - Strict State-Sync)
 extension GeminiWebManager {
     static let fingerprintMaskScript = """
     (function() {
@@ -269,78 +269,88 @@ extension GeminiWebManager {
     
     static let injectedScript = """
     (function() {
-        console.log("🚀 Bridge v22 (Strict) Initializing...");
+        console.log("🚀 Bridge v23 (Strict State-Sync) Initializing...");
         
         window.__fetchBridge = {
             log: function(msg) { this.postToSwift({ type: 'LOG', message: msg }); },
 
             sendPromptStrict: function(text, id) {
-                this.log("Step 1: Sending... " + text.substring(0, 10));
+                this.log("Step 1: Preparing to send...");
                 this.lastSentText = text.trim();
                 
-                // 严格模式：只数 role="model" 的气泡
+                // 1. 记录初始状态 (关键：记录当前有多少个气泡)
                 this.initialModelCount = document.querySelectorAll('div[data-message-author-role="model"]').length;
+                this.initialUserCount = document.querySelectorAll('div[data-message-author-role="user"]').length;
                 
                 const input = document.querySelector('div[contenteditable="true"]');
                 if (!input) {
-                    this.log("❌ Input missing");
-                    this.postToSwift({ type: 'GEMINI_RESPONSE', id: id, content: "Error: Input box not found." });
+                    this.finish(id, "error", "Error: Input box not found (DOM Changed?)");
                     return;
                 }
                 
-                // 1. 写入 (Deep Write)
+                // 2. 暴力写入 (清除 -> 写入 -> 事件)
                 input.focus();
                 document.execCommand('selectAll', false, null);
                 document.execCommand('delete', false, null);
-                input.innerText = text; // 暴力写入
+                input.textContent = text; 
                 input.dispatchEvent(new Event('input', { bubbles: true }));
                 
-                // 2. 点击发送 (不重试，防止发两条)
+                // 3. 点击发送 & 验证发送是否成功
                 setTimeout(() => {
                     const sendBtn = document.querySelector('button[aria-label*="Send"], button[class*="send-button"]');
                     if (sendBtn) {
                         sendBtn.click();
-                        this.log("👆 Clicked Send");
+                        this.log("👆 Clicked Send Button");
                     } else {
                         const enter = new KeyboardEvent('keydown', { bubbles: true, cancelable: true, keyCode: 13, key: 'Enter' });
                         input.dispatchEvent(enter);
                         this.log("⌨️ Hit Enter");
                     }
-                    this.startPolling(id);
-                }, 600);
+                    
+                    // 🚨 关键修复：发送验证 (3秒后检查用户气泡是否增加)
+                    setTimeout(() => {
+                        const newUserCount = document.querySelectorAll('div[data-message-author-role="user"]').length;
+                        if (newUserCount <= this.initialUserCount) {
+                            // 发送失败！不要干等50秒，直接报错，防止 App 挂起或抓取旧数据
+                            this.log("❌ Critical: Message NOT sent (User bubble count did not increase)");
+                            this.finish(id, "error", "Error: Send failed. Input stuck.");
+                        } else {
+                            this.log("✅ Message sent verified. Waiting for reply...");
+                            this.startPolling(id);
+                        }
+                    }, 3000);
+                    
+                }, 800);
             },
             
             startPolling: function(id) {
                 const self = this;
                 if (this.pollingTimer) clearInterval(this.pollingTimer);
-                this.log("Step 2: Polling for new Model bubble...");
                 
                 let stableCount = 0;
                 let lastTextLen = 0;
                 const startTime = Date.now();
                 
                 this.pollingTimer = setInterval(() => {
-                    if (Date.now() - startTime > 48000) {
-                        self.finish(id, "timeout");
-                        return;
-                    }
+                    // 超时由 Swift 控制，JS 侧只需负责检测完成
+                    if (Date.now() - startTime > 60000) return; 
                     
                     const modelBubbles = document.querySelectorAll('div[data-message-author-role="model"]');
                     const currentCount = modelBubbles.length;
                     
-                    // 只有当 AI 气泡数量增加时，才认为是回复
+                    // 只有当 Model 气泡真的增加了，才认为是新回复
                     if (currentCount > self.initialModelCount) {
                         const lastBubble = modelBubbles[currentCount - 1];
                         const text = lastBubble.innerText.trim();
                         
-                        // 垃圾过滤 (Anti-Ghost)
+                        // 垃圾过滤
                         if (text.length < 1) return;
-                        if (text === "Thinking...") return; // 忽略 Thinking 状态
+                        if (text === "Thinking...") return; 
                         
-                        // 稳定性检查
+                        // 稳定性检查 (防止只抓到一半)
                         if (text.length === lastTextLen) {
                             stableCount++;
-                            if (stableCount > 3) { // 1.5s 稳定
+                            if (stableCount > 4) { // 2s 稳定 (增加从容度，防止截断)
                                 self.finish(id, "completed");
                             }
                         } else {
@@ -351,27 +361,41 @@ extension GeminiWebManager {
                 }, 500);
             },
             
-            finish: function(id, reason) {
+            finish: function(id, reason, errorOverride) {
                 if (this.pollingTimer) { clearInterval(this.pollingTimer); this.pollingTimer = null; }
                 this.log("Step 3: Finishing via " + reason);
+                
+                if (errorOverride) {
+                     this.postToSwift({ type: 'GEMINI_RESPONSE', id: id, content: errorOverride });
+                     return;
+                }
                 
                 const text = this.extractStrict();
                 this.postToSwift({ type: 'GEMINI_RESPONSE', id: id, content: text });
             },
             
             forceFinish: function(id) {
-                this.finish(id, "force_scrape");
+                // 强制抓取时，必须检查是否真的有新内容，否则报错
+                const currentCount = document.querySelectorAll('div[data-message-author-role="model"]').length;
+                // 如果气泡没增加，说明超时了也没生成出来，必须返回 Error
+                if (currentCount <= this.initialModelCount) {
+                     this.finish(id, "timeout_empty", "Error: Timeout - No new response generated.");
+                } else {
+                     this.finish(id, "force_scrape");
+                }
             },
             
             extractStrict: function() {
-                // 严禁 Fallback！只抓取 role="model"
                 const modelBubbles = document.querySelectorAll('div[data-message-author-role="model"]');
-                if (modelBubbles.length === 0) return "Error: No model response found (Strict Mode)";
                 
-                // 返回最后一个
+                // 再次双重检查数量
+                if (modelBubbles.length <= this.initialModelCount) {
+                    return "Error: No new response found (Count mismatch)";
+                }
+                
                 const t = modelBubbles[modelBubbles.length - 1].innerText.trim();
                 
-                // 再次检查是不是把用户的话当成 Model 了 (防止 Google DOM 变动导致 role 错乱)
+                // 防止把用户的输入当成模型输出 (Echo 检查)
                 if (this.lastSentText && t === this.lastSentText) {
                     return "Error: Echo detected (Scraper grabbed user text)";
                 }
