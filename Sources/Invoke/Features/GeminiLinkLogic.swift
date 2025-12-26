@@ -131,6 +131,9 @@ class GeminiLinkLogic: ObservableObject {
         restoreUserClipboardImmediately()
         setStatus("Processing...", isBusy: true)
         
+        // 🛡️ Thread Safety: Capture projectRoot on main thread before async
+        let root = projectRoot
+        
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
             
@@ -139,7 +142,7 @@ class GeminiLinkLogic: ObservableObject {
             
             var modified: Set<String> = []
             for f in files {
-                if self.writeFile(f.path, f.content) {
+                if self.writeFile(f.path, f.content, projectRoot: root) {
                     modified.insert(f.path)
                 }
             }
@@ -168,8 +171,8 @@ class GeminiLinkLogic: ObservableObject {
         // ----------------------------------------------------
         // Strategy B: Aider Markdown (```filepath:...)
         // ----------------------------------------------------
-        // Regex matches: ```filepath: path/to/file \n content \n ```
-        let mdPattern = "```filepath:\\s*([^\\n]+)\\n(.*?)\\n```"
+        // Regex matches: ```filepath: path/to/file \n content \n ``` (允许结尾没有换行)
+        let mdPattern = "```filepath:\\s*([^\\n]+)\\n(.*?)\\n?```"
         if let mdRegex = try? NSRegularExpression(pattern: mdPattern, options: [.dotMatchesLineSeparators]) {
             let matches = mdRegex.matches(in: text, range: NSRange(text.startIndex..<text.endIndex, in: text))
             payloads.append(contentsOf: matches.compactMap { m -> FilePayload? in
@@ -208,7 +211,14 @@ class GeminiLinkLogic: ObservableObject {
         return t
     }
     
-    private func writeFile(_ path: String, _ content: String) -> Bool {
+    private func writeFile(_ path: String, _ content: String, projectRoot: String) -> Bool {
+        // 🛡️ Overwrite Risk Protection: Detect and reject Diff/partial content
+        if isDiffOrPartialContent(content) {
+            print("⚠️ Rejected: Content appears to be a Diff or partial file (contains conflict markers)")
+            print("📝 Content preview: \(content.prefix(200))...")
+            return false
+        }
+        
         let url = URL(fileURLWithPath: projectRoot).appendingPathComponent(path)
         do {
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -228,6 +238,38 @@ class GeminiLinkLogic: ObservableObject {
             print("❌ Write Failed: \(path) - \(error)")
             return false
         }
+    }
+    
+    /// 🛡️ 检测内容是否为 Diff 或部分文件（防止覆盖风险）
+    private func isDiffOrPartialContent(_ content: String) -> Bool {
+        // 检测常见的 Diff/冲突标记
+        let diffMarkers = [
+            "<<<<<<< SEARCH",
+            "<<<<<<<",
+            "=======",
+            ">>>>>>>",
+            "--- a/",
+            "+++ b/",
+            "@@ -",
+            "diff --git"
+        ]
+        
+        for marker in diffMarkers {
+            if content.contains(marker) {
+                return true
+            }
+        }
+        
+        // 检测内容是否异常短（可能是片段而非完整文件）
+        // 如果内容少于 50 字符且包含多行，可能是片段
+        let lines = content.components(separatedBy: .newlines)
+        if content.count < 50 && lines.count > 3 {
+            // 可能是代码片段，但需要更严格的判断
+            // 这里只记录警告，不直接拒绝（因为有些小文件确实很短）
+            print("⚠️ Warning: Content is very short (\(content.count) chars), may be partial")
+        }
+        
+        return false
     }
     
     /// 本地预验证: 检查Swift文件语法
