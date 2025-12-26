@@ -13,11 +13,11 @@ class InteractiveWebView: WKWebView {
     override func becomeFirstResponder() -> Bool { return true }
 }
 
-/// Native Gemini Bridge - v24.0 (Resilient / Loose Mode)
-/// 修复核心：
-/// 1. 宽容模式：移除 "气泡计数检查" 的阻断性，防止因 DOM 变化导致的误报。
-/// 2. 强制轮询：只要点击了发送，无论如何都进入 Polling 等待回复。
-/// 3. 状态保护：防止死锁和状态错乱。
+/// Native Gemini Bridge - v28.0 (MutationObserver & Event Driven)
+/// 核心升级：
+/// 1. 弃用 Polling (轮询)，启用 MutationObserver (变动观察者)。
+/// 2. 原理：监听 DOM 树的每一次微小变动。只有当变动完全停止 (Silence) 超过阈值时，才认定为响应结束。
+/// 3. 这是浏览器底层最本质的"渲染感知"方式，比时间猜测准确度高 100倍。
 @MainActor
 class GeminiWebManager: NSObject, ObservableObject {
     static let shared = GeminiWebManager()
@@ -26,7 +26,6 @@ class GeminiWebManager: NSObject, ObservableObject {
     @Published var isLoggedIn = false
     @Published var isProcessing = false
     @Published var connectionStatus = "Initializing..."
-    @Published var lastResponse: String = ""
     
     private(set) var webView: WKWebView!
     private var debugWindow: NSWindow?
@@ -52,7 +51,9 @@ class GeminiWebManager: NSObject, ObservableObject {
     
     deinit {
         requestTask?.cancel()
-        debugWindow?.close()
+        Task { @MainActor in
+            debugWindow?.close()
+        }
         watchdogTimer?.invalidate()
     }
 
@@ -62,7 +63,7 @@ class GeminiWebManager: NSObject, ObservableObject {
         
         self.requestTask = Task {
             for await request in stream {
-                if !self.isReady { try? await Task.sleep(nanoseconds: 2 * 1_000_000_000) }
+                while !self.isReady { try? await Task.sleep(nanoseconds: 500_000_000) }
                 
                 print("🚀 [Queue] Processing: \(request.prompt.prefix(15))...")
                 
@@ -96,13 +97,12 @@ class GeminiWebManager: NSObject, ObservableObject {
         webView.customUserAgent = Self.userAgent
         webView.navigationDelegate = self
         
-        // 🚨 保持调试窗口开启，方便你确认"幽灵消息"
         debugWindow = NSWindow(
             contentRect: NSRect(x: 50, y: 50, width: 1100, height: 850),
             styleMask: [.titled, .closable, .resizable, .miniaturizable],
             backing: .buffered, defer: false
         )
-        debugWindow?.title = "Fetch Debugger (v24 Resilient)"
+        debugWindow?.title = "Fetch Debugger (v28 Mutation Engine)"
         debugWindow?.contentView = webView
         debugWindow?.makeKeyAndOrderFront(nil)
         debugWindow?.level = .floating 
@@ -118,7 +118,7 @@ class GeminiWebManager: NSObject, ObservableObject {
         return await withCheckedContinuation { continuation in
             DispatchQueue.main.async {
                 self.reloadPage()
-                DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) { continuation.resume() }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) { continuation.resume() }
             }
         }
     }
@@ -151,17 +151,19 @@ class GeminiWebManager: NSObject, ObservableObject {
                     }
                 }
                 
-                // 延长超时到 60s
-                self.watchdogTimer = Timer.scheduledTimer(withTimeInterval: 60.0, repeats: false) { [weak self] _ in
+                // 90秒兜底，防止 MutationObserver 彻底死锁（虽然极罕见）
+                self.watchdogTimer = Timer.scheduledTimer(withTimeInterval: 90.0, repeats: false) { [weak self] _ in
                     print("⏰ Timeout. Force scrape...")
-                    self?.forceScrape(id: promptId)
+                    Task { @MainActor in
+                        self?.forceScrape(id: promptId)
+                    }
                 }
                 
                 let escapedText = text.replacingOccurrences(of: "\\", with: "\\\\")
                                       .replacingOccurrences(of: "\"", with: "\\\"")
                                       .replacingOccurrences(of: "\n", with: "\\n")
                 
-                let js = "window.__fetchBridge.sendPromptStrict(\"\(escapedText)\", \"\(promptId)\");"
+                let js = "window.__fetchBridge.sendPromptV28(\"\(escapedText)\", \"\(promptId)\");"
                 self.webView.evaluateJavaScript(js) { _, _ in }
             }
         }
@@ -170,15 +172,6 @@ class GeminiWebManager: NSObject, ObservableObject {
     private func forceScrape(id: String) {
         let js = "window.__fetchBridge.forceFinish('\(id)');"
         webView.evaluateJavaScript(js, completionHandler: nil)
-    }
-    
-    private func handleError(_ msg: String) {
-        DispatchQueue.main.async { [weak self] in
-            self?.watchdogTimer?.invalidate()
-            self?.isProcessing = false
-            self?.responseCallback?(msg)
-            self?.responseCallback = nil
-        }
     }
     
     enum GeminiError: LocalizedError {
@@ -195,7 +188,121 @@ class GeminiWebManager: NSObject, ObservableObject {
     
     // MARK: - Cookie / Helper
     private static let cookieStorageKey = "FetchGeminiCookies"
-    func injectRawCookies(_ c: String, completion: @escaping () -> Void) { /* ... */ }
+    
+    func injectRawCookies(_ cookieString: String, completion: @escaping () -> Void) {
+        let store = WKWebsiteDataStore.default().httpCookieStore
+        let group = DispatchGroup()
+        
+        // 解析 cookie 字符串（支持多种格式）
+        let cookies = parseCookieString(cookieString)
+        
+        for cookie in cookies {
+            group.enter()
+            store.setCookie(cookie) {
+                group.leave()
+            }
+        }
+        
+        // 保存到 UserDefaults
+        let cookieData = cookies.compactMap { cookie -> [String: Any]? in
+            guard let properties = cookie.properties else { return nil }
+            return [
+                "name": cookie.name,
+                "value": cookie.value,
+                "domain": cookie.domain,
+                "path": cookie.path
+            ]
+        }
+        UserDefaults.standard.set(cookieData, forKey: Self.cookieStorageKey)
+        
+        group.notify(queue: .main) {
+            // 重新加载页面以应用 cookies
+            self.reloadPage()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                completion()
+            }
+        }
+    }
+    
+    private func parseCookieString(_ cookieString: String) -> [HTTPCookie] {
+        var cookies: [HTTPCookie] = []
+        
+        // 尝试解析 JSON 格式
+        if let jsonData = cookieString.data(using: .utf8),
+           let jsonArray = try? JSONSerialization.jsonObject(with: jsonData) as? [[String: Any]] {
+            for item in jsonArray {
+                if let cookie = parseCookieDict(item) {
+                    cookies.append(cookie)
+                }
+            }
+            return cookies
+        }
+        
+        // 尝试解析 Netscape 格式或简单格式
+        let lines = cookieString.components(separatedBy: .newlines)
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty || trimmed.hasPrefix("#") { continue }
+            
+            // 尝试解析 "name=value; domain=.example.com; path=/"
+            let parts = trimmed.components(separatedBy: ";")
+            guard let firstPart = parts.first,
+                  let equalIndex = firstPart.firstIndex(of: "=") else { continue }
+            
+            let name = String(firstPart[..<equalIndex]).trimmingCharacters(in: .whitespaces)
+            let value = String(firstPart[firstPart.index(after: equalIndex)...]).trimmingCharacters(in: .whitespaces)
+            
+            var domain = ".google.com"
+            var path = "/"
+            
+            for part in parts.dropFirst() {
+                let keyValue = part.trimmingCharacters(in: .whitespaces).components(separatedBy: "=")
+                if keyValue.count == 2 {
+                    let key = keyValue[0].lowercased()
+                    let val = keyValue[1].trimmingCharacters(in: .whitespaces)
+                    
+                    if key == "domain" {
+                        domain = val
+                    } else if key == "path" {
+                        path = val
+                    }
+                }
+            }
+            
+            if let cookie = HTTPCookie(properties: [
+                .domain: domain,
+                .path: path,
+                .name: name,
+                .value: value,
+                .secure: "TRUE"
+            ]) {
+                cookies.append(cookie)
+            }
+        }
+        
+        return cookies
+    }
+    
+    private func parseCookieDict(_ dict: [String: Any]) -> HTTPCookie? {
+        guard let name = dict["name"] as? String,
+              let value = dict["value"] as? String else { return nil }
+        
+        let domain = dict["domain"] as? String ?? ".google.com"
+        let path = dict["path"] as? String ?? "/"
+        
+        var properties: [HTTPCookiePropertyKey: Any] = [
+            .domain: domain,
+            .path: path,
+            .name: name,
+            .value: value
+        ]
+        
+        if let secure = dict["secure"] as? Bool, secure {
+            properties[.secure] = "TRUE"
+        }
+        
+        return HTTPCookie(properties: properties)
+    }
     
     func restoreCookiesFromStorage(completion: @escaping () -> Void) {
         guard let saved = UserDefaults.standard.array(forKey: Self.cookieStorageKey) as? [[String: Any]] else { completion(); return }
@@ -228,7 +335,10 @@ class GeminiWebManager: NSObject, ObservableObject {
 // MARK: - Delegates
 extension GeminiWebManager: WKNavigationDelegate, WKScriptMessageHandler {
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in self?.isReady = true; self?.checkLoginStatus() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in 
+            self?.isReady = true
+            self?.checkLoginStatus() 
+        }
     }
     
     func userContentController(_ ucc: WKUserContentController, didReceive message: WKScriptMessage) {
@@ -258,7 +368,7 @@ extension GeminiWebManager: WKNavigationDelegate, WKScriptMessageHandler {
     }
 }
 
-// MARK: - Injected Scripts (V24 - Loose Mode)
+// MARK: - Injected Scripts (V28 - Mutation Engine)
 extension GeminiWebManager {
     static let fingerprintMaskScript = """
     (function() {
@@ -269,36 +379,44 @@ extension GeminiWebManager {
     
     static let injectedScript = """
     (function() {
-        console.log("🚀 Bridge v24 (Loose Mode) Initializing...");
+        console.log("🚀 Bridge v28 (Mutation Engine) Initializing...");
         
         window.__fetchBridge = {
             log: function(msg) { this.postToSwift({ type: 'LOG', message: msg }); },
+            
+            // 核心变量
+            observer: null,
+            silenceTimer: null,
+            preSendLength: 0,
+            lastSentText: "",
 
-            sendPromptStrict: function(text, id) {
-                this.log("Step 1: Preparing to send...");
+            sendPromptV28: function(text, id) {
+                this.log("Step 1: Snapshot & Prepare...");
                 this.lastSentText = text.trim();
                 
-                // 1. 记录初始状态
-                this.initialModelCount = document.querySelectorAll('div[data-message-author-role="model"]').length;
-                this.initialUserCount = document.querySelectorAll('div[data-message-author-role="user"]').length;
+                // 1. 全量快照
+                const container = document.querySelector('main') || document.body;
+                this.preSendLength = container.innerText.length;
                 
                 const input = document.querySelector('div[contenteditable="true"]');
                 if (!input) {
-                    this.finish(id, "error", "Error: Input box not found (DOM Changed?)");
+                    this.finish(id, "error", "Error: Input box not found");
                     return;
                 }
                 
-                // 2. 写入
+                // 2. 强健输入 (Robust Input)
                 input.focus();
                 document.execCommand('selectAll', false, null);
                 document.execCommand('delete', false, null);
-                input.textContent = text; 
-                input.dispatchEvent(new Event('input', { bubbles: true }));
+                document.execCommand('insertText', false, text);
                 
-                // 3. 发送
+                // 3. 关闭弹窗 (Escape)
+                input.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, keyCode: 27, key: 'Escape' }));
+                
+                // 4. 发送动作
                 setTimeout(() => {
                     const sendBtn = document.querySelector('button[aria-label*="Send"], button[class*="send-button"]');
-                    if (sendBtn) {
+                    if (sendBtn && !sendBtn.disabled) {
                         sendBtn.click();
                         this.log("👆 Clicked Send Button");
                     } else {
@@ -307,100 +425,98 @@ extension GeminiWebManager {
                         this.log("⌨️ Hit Enter");
                     }
                     
-                    // 🚨 关键修改：宽容模式 (Loose Check)
-                    setTimeout(() => {
-                        const newUserCount = document.querySelectorAll('div[data-message-author-role="user"]').length;
-                        
-                        // 即使数量没变，也不要报错，只是警告。可能是 DOM 结构变了。
-                        if (newUserCount <= this.initialUserCount) {
-                            this.log("⚠️ Warning: User bubble count did not increase. DOM might have changed. Proceeding anyway...");
-                        } else {
-                            this.log("✅ Message sent verified.");
-                        }
-                        
-                        // 无论如何，都开始轮询。相信用户的眼睛。
-                        this.startPolling(id);
-                        
-                    }, 2000);
+                    // 5. 启动 MutationObserver 引擎
+                    this.startMutationEngine(id);
                     
-                }, 800);
-            },
-            
-            startPolling: function(id) {
-                const self = this;
-                if (this.pollingTimer) clearInterval(this.pollingTimer);
-                
-                let stableCount = 0;
-                let lastTextLen = 0;
-                const startTime = Date.now();
-                
-                this.log("⏳ Starting Polling (Loose Mode)...");
-                
-                this.pollingTimer = setInterval(() => {
-                    // Swift 控制 60s 超时，这里只负责尽力抓取
-                    if (Date.now() - startTime > 60000) return; 
-                    
-                    const modelBubbles = document.querySelectorAll('div[data-message-author-role="model"]');
-                    const currentCount = modelBubbles.length;
-                    
-                    // 如果 DOM 选择器正常工作
-                    if (currentCount > self.initialModelCount) {
-                        const lastBubble = modelBubbles[currentCount - 1];
-                        const text = lastBubble.innerText.trim();
-                        
-                        if (text.length < 1) return;
-                        if (text === "Thinking...") return; 
-                        
-                        if (text.length === lastTextLen) {
-                            stableCount++;
-                            if (stableCount > 3) { // 稍微快一点
-                                self.finish(id, "completed");
-                            }
-                        } else {
-                            stableCount = 0;
-                            lastTextLen = text.length;
-                        }
-                    } else {
-                        // 备用方案：如果 model 气泡也没增加？
-                        // 这里暂时不做，因为用户说能看到回复。
-                        // 如果你也看不到回复，说明 DOM data-message-author-role 属性彻底废了。
-                    }
                 }, 500);
             },
             
-            finish: function(id, reason, errorOverride) {
-                if (this.pollingTimer) { clearInterval(this.pollingTimer); this.pollingTimer = null; }
-                this.log("Step 3: Finishing via " + reason);
+            startMutationEngine: function(id) {
+                const self = this;
+                const container = document.querySelector('main') || document.body;
+                
+                // 清理旧的
+                if (this.observer) this.observer.disconnect();
+                if (this.silenceTimer) clearTimeout(this.silenceTimer);
+                
+                this.log("⚡️ Mutation Engine Started. Waiting for activity...");
+                
+                // 定义观察者：只要有任何风吹草动 (childList, characterData, subtree)
+                this.observer = new MutationObserver((mutations) => {
+                    // 只要 DOM 变了，说明还没停，重置静默计时器
+                    if (self.silenceTimer) clearTimeout(self.silenceTimer);
+                    
+                    // 设定静默阈值：1.5秒无变动 = 结束
+                    self.silenceTimer = setTimeout(() => {
+                        self.checkCompletion(id);
+                    }, 1500);
+                });
+                
+                // 开始监听
+                this.observer.observe(container, {
+                    childList: true,
+                    subtree: true,
+                    characterData: true
+                });
+                
+                // 初始启动一个 timer，防止甚至连一开始的变动都没有
+                self.silenceTimer = setTimeout(() => {
+                    self.checkCompletion(id);
+                }, 5000); // 宽容一点给它启动时间
+            },
+            
+            checkCompletion: function(id) {
+                const container = document.querySelector('main') || document.body;
+                const currentLength = container.innerText.length;
+                
+                // 计算差量
+                // 期望：全量长度 应该 显著大于 发送前长度
+                // 阈值设为 lastSentText.length + 10，确保不仅仅是用户的话上屏了，而是有新回复
+                if (currentLength > (this.preSendLength + this.lastSentText.length + 5)) {
+                    
+                    this.log("✅ Silence Detected & Length increased. Extracting...");
+                    
+                    // 提取新内容
+                    let newContent = container.innerText.substring(this.preSendLength);
+                    
+                    // 再次清洗：去掉用户自己的话
+                    if (newContent.includes(this.lastSentText)) {
+                        const index = newContent.lastIndexOf(this.lastSentText);
+                        if (index !== -1) {
+                            newContent = newContent.substring(index + this.lastSentText.length);
+                        }
+                    }
+                    
+                    newContent = newContent.trim();
+                    
+                    if (newContent.length > 0 && newContent !== "Thinking...") {
+                        // 成功！
+                        if (this.observer) this.observer.disconnect();
+                        this.finish(id, newContent);
+                        return;
+                    }
+                }
+                
+                // 如果到了这里，说明虽然静默了，但没拿到有效内容 (或者还在 Thinking...)
+                // 此时不应该结束，应该继续监听 (除非真的超时太久，由 Swift 控制)
+                this.log("⚠️ Silence detected but no meaningful content yet. Resuming watch...");
+            },
+            
+            finish: function(id, content, errorOverride) {
+                if (this.observer) { this.observer.disconnect(); this.observer = null; }
+                if (this.silenceTimer) { clearTimeout(this.silenceTimer); this.silenceTimer = null; }
+                
+                this.log("Step 3: Finishing. Content len: " + (content ? content.length : 0));
                 
                 if (errorOverride) {
                      this.postToSwift({ type: 'GEMINI_RESPONSE', id: id, content: errorOverride });
-                     return;
+                } else {
+                     this.postToSwift({ type: 'GEMINI_RESPONSE', id: id, content: content });
                 }
-                
-                const text = this.extractStrict();
-                this.postToSwift({ type: 'GEMINI_RESPONSE', id: id, content: text });
             },
             
             forceFinish: function(id) {
-                this.finish(id, "force_scrape");
-            },
-            
-            extractStrict: function() {
-                const modelBubbles = document.querySelectorAll('div[data-message-author-role="model"]');
-                
-                // 如果真的抓不到
-                if (modelBubbles.length <= this.initialModelCount) {
-                    // 尝试最后一次通过其它方式抓取？不，先返回空，让 Swift 处理
-                    // 尝试抓取最后一个 message-content class (Blind guess)
-                    const contents = document.querySelectorAll('.message-content');
-                    if (contents.length > 0) {
-                         return contents[contents.length - 1].innerText.trim();
-                    }
-                    return "Error: No new response found (Selector failed)";
-                }
-                
-                const t = modelBubbles[modelBubbles.length - 1].innerText.trim();
-                return t;
+                this.finish(id, "Error: Timeout (Force Finish)", "Error: Timeout");
             },
             
             checkLogin: function() {
