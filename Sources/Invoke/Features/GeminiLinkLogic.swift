@@ -148,66 +148,51 @@ class GeminiLinkLogic: ObservableObject {
         }
     }
     
-    // 🔥 Core Parser - 支持 Protocol V2 (XML) 和 V3 (!!!标记)
+    // 🔥 Core Parser for V2 & V3 Protocol
     private func parseXMLFiles(_ text: String) -> [FilePayload] {
-        var files: [FilePayload] = []
+        var payloads: [FilePayload] = []
         
-        // 优先尝试 V3 格式 (!!!FILE_START!!!)
-        if text.contains(tagFileStart) {
-            let components = text.components(separatedBy: tagFileStart)
+        // ----------------------------------------------------
+        // Strategy A: Protocol V3 (!!!FILE_START!!!) - PREFERRED
+        // ----------------------------------------------------
+        // Regex: !!!FILE_START!!! path/to/file [newline] content [newline] !!!FILE_END!!!
+        let v3Pattern = "!!!FILE_START!!!\\s+([^\\n]+)\\n(.*?)\\n!!!FILE_END!!!"
+        if let v3Regex = try? NSRegularExpression(pattern: v3Pattern, options: [.dotMatchesLineSeparators]) {
+            let matches = v3Regex.matches(in: text, range: NSRange(text.startIndex..<text.endIndex, in: text))
             
-            for component in components.dropFirst() {
-                guard let endRange = component.range(of: tagFileEnd) else { continue }
+            let v3Payloads = matches.compactMap { m -> FilePayload? in
+                guard let rPath = Range(m.range(at: 1), in: text),
+                      let rContent = Range(m.range(at: 2), in: text) else { return nil }
                 
-                let fileBlock = String(component[..<endRange.lowerBound])
-                let lines = fileBlock.components(separatedBy: .newlines)
-                
-                guard let firstLine = lines.first?.trimmingCharacters(in: .whitespaces),
-                      !firstLine.isEmpty else { continue }
-                
-                let path = firstLine.trimmingCharacters(in: .whitespaces)
-                let content = lines.dropFirst().joined(separator: "\n").trimmingCharacters(in: .newlines)
-                
-                if !path.isEmpty && !content.isEmpty {
-                    files.append(FilePayload(path: path, content: content))
-                }
+                let path = String(text[rPath]).trimmingCharacters(in: .whitespacesAndNewlines)
+                let content = String(text[rContent])
+                return FilePayload(path: path, content: content)
             }
-            
-            if !files.isEmpty {
-                print("✅ Parsed \(files.count) file(s) using Protocol V3")
-                return files
-            }
+            payloads.append(contentsOf: v3Payloads)
         }
         
-        // 回退到 V2 XML 格式 (<FILE_CONTENT>)
-        let xmlPattern = #"<FILE_CONTENT\s+path="([^"]+)"[^>]*>([\s\S]*?)</FILE_CONTENT>"#
-        if let regex = try? NSRegularExpression(pattern: xmlPattern, options: []) {
-            let nsText = text as NSString
-            let matches = regex.matches(in: text, options: [], range: NSRange(location: 0, length: nsText.length))
+        // ----------------------------------------------------
+        // Strategy B: Protocol V2 (XML) - FALLBACK
+        // ----------------------------------------------------
+        // Regex: <FILE_CONTENT path="..."> ... </FILE_CONTENT>
+        let v2Pattern = "<FILE_CONTENT\\s+path=\"([^\"]+)\"\\s*>(.*?)</FILE_CONTENT>"
+        if let v2Regex = try? NSRegularExpression(pattern: v2Pattern, options: [.dotMatchesLineSeparators]) {
+            let matches = v2Regex.matches(in: text, range: NSRange(text.startIndex..<text.endIndex, in: text))
             
-            for match in matches {
-                if match.numberOfRanges >= 3 {
-                    let pathRange = match.range(at: 1)
-                    let contentRange = match.range(at: 2)
-                    
-                    if pathRange.location != NSNotFound, contentRange.location != NSNotFound {
-                        let path = nsText.substring(with: pathRange)
-                        let content = nsText.substring(with: contentRange)
-                        
-                        if !path.isEmpty && !content.isEmpty {
-                            files.append(FilePayload(path: path, content: content))
-                        }
-                    }
-                }
+            let v2Payloads = matches.compactMap { m -> FilePayload? in
+                guard let rPath = Range(m.range(at: 1), in: text),
+                      let rContent = Range(m.range(at: 2), in: text) else { return nil }
+                
+                let path = String(text[rPath])
+                // V2 often has extra newlines due to XML tags, so we trim them
+                let content = String(text[rContent]).trimmingCharacters(in: .newlines)
+                return FilePayload(path: path, content: content)
             }
-            
-            if !files.isEmpty {
-                print("✅ Parsed \(files.count) file(s) using Protocol V2 (XML)")
-                return files
-            }
+            payloads.append(contentsOf: v2Payloads)
         }
         
-        return files
+        print("🔍 Parsed \(payloads.count) files (V3+V2 mixed)")
+        return payloads
     }
     
     private func sanitizeContent(_ text: String) -> String {

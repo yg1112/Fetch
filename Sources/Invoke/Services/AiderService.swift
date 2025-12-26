@@ -24,30 +24,92 @@ class AiderService: ObservableObject {
     
     // MARK: - Aider Process Management
     
+    /// 智能查找 Aider 路径（优先级：配置文件 > 动态查找 > 硬编码路径）
+    private func findAiderPath() -> String? {
+        // 1. 优先从配置文件读取
+        let configDir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("com.yukungao.fetch")
+        let configFile = configDir?.appendingPathComponent("config.json")
+        
+        if let configFile = configFile,
+           let data = try? Data(contentsOf: configFile),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let path = json["aiderPath"] as? String,
+           FileManager.default.fileExists(atPath: path) {
+            return path
+        }
+        
+        // 2. 使用 shell 动态查找（通过 which 命令）
+        let whichProcess = Process()
+        whichProcess.executableURL = URL(fileURLWithPath: "/bin/bash")
+        whichProcess.arguments = ["-c", "which aider"]
+        
+        let whichPipe = Pipe()
+        whichProcess.standardOutput = whichPipe
+        whichProcess.standardError = Pipe()
+        
+        do {
+            try whichProcess.run()
+            whichProcess.waitUntilExit()
+            
+            let data = whichPipe.fileHandleForReading.readDataToEndOfFile()
+            if let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !output.isEmpty,
+               FileManager.default.fileExists(atPath: output) {
+                return output
+            }
+        } catch {
+            // 继续尝试其他方法
+        }
+        
+        // 3. 扩展的硬编码路径列表（包括常见 Python 环境）
+        let homeDir = NSHomeDirectory()
+        let possiblePaths = [
+            "/usr/local/bin/aider",
+            "/opt/homebrew/bin/aider",
+            "\(homeDir)/.local/bin/aider",
+            "\(homeDir)/anaconda3/bin/aider",
+            "\(homeDir)/miniconda3/bin/aider",
+            "\(homeDir)/.pyenv/shims/aider",
+            "\(homeDir)/.pyenv/versions/*/bin/aider",
+            "/opt/anaconda3/bin/aider",
+            "/usr/bin/aider"
+        ]
+        
+        for path in possiblePaths {
+            // 处理通配符路径
+            if path.contains("*") {
+                let dir = (path as NSString).deletingLastPathComponent
+                let pattern = (path as NSString).lastPathComponent
+                if let enumerator = FileManager.default.enumerator(atPath: dir) {
+                    for file in enumerator {
+                        if let fileName = file as? String, fileName == "aider" {
+                            let fullPath = (dir as NSString).appendingPathComponent(fileName)
+                            if FileManager.default.fileExists(atPath: fullPath) {
+                                return fullPath
+                            }
+                        }
+                    }
+                }
+            } else if FileManager.default.fileExists(atPath: path) {
+                return path
+            }
+        }
+        
+        return nil
+    }
+    
     func startAider(projectPath: String) {
         guard !isRunning else { return }
         currentProject = projectPath
         
         let process = Process()
         
-        // 查找 aider 路径
-        let possiblePaths = [
-            "/usr/local/bin/aider",
-            "/opt/homebrew/bin/aider",
-            "\(NSHomeDirectory())/.local/bin/aider"
-        ]
-        
-        var aiderPath: String?
-        for path in possiblePaths {
-            if FileManager.default.fileExists(atPath: path) {
-                aiderPath = path
-                break
-            }
-        }
-        
-        guard let foundPath = aiderPath else {
+        // 智能查找 aider 路径
+        guard let foundPath = findAiderPath() else {
             appendSystemMessage("⚠️ Aider not found. Running in Gemini-only mode.")
-            appendSystemMessage("To enable code editing, install: pip install aider-chat")
+            appendSystemMessage("💡 Run: ./Setup_Aider_Path.sh to auto-configure")
+            appendSystemMessage("Or install: pip install aider-chat")
             isRunning = true // 仍然可以使用 Gemini
             return
         }
