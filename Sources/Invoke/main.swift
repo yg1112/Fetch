@@ -53,18 +53,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let editMenu = NSMenu(title: "Edit")
         editMenuItem.submenu = editMenu
         
-        editMenu.addItem(NSMenuItem(title: "Undo", action: Selector("undo:"), keyEquivalent: "z"))
+        // 使用 Selector(("undo:")) 避免 "undeclared selector" 警告
+        // 这些选择器将由 Responder Chain (如 NSTextView) 处理
+        editMenu.addItem(NSMenuItem(title: "Undo", action: Selector(("undo:")), keyEquivalent: "z"))
         
-        let redoItem = NSMenuItem(title: "Redo", action: Selector("redo:"), keyEquivalent: "Z")
+        let redoItem = NSMenuItem(title: "Redo", action: Selector(("redo:")), keyEquivalent: "Z")
         redoItem.keyEquivalentModifierMask = NSEvent.ModifierFlags([.command, .shift])
         editMenu.addItem(redoItem)
         
         editMenu.addItem(NSMenuItem.separator())
         
-        editMenu.addItem(NSMenuItem(title: "Cut", action: Selector("cut:"), keyEquivalent: "x"))
-        editMenu.addItem(NSMenuItem(title: "Copy", action: Selector("copy:"), keyEquivalent: "c"))
-        editMenu.addItem(NSMenuItem(title: "Paste", action: Selector("paste:"), keyEquivalent: "v"))
-        editMenu.addItem(NSMenuItem(title: "Select All", action: Selector("selectAll:"), keyEquivalent: "a"))
+        editMenu.addItem(NSMenuItem(title: "Cut", action: Selector(("cut:")), keyEquivalent: "x"))
+        editMenu.addItem(NSMenuItem(title: "Copy", action: Selector(("copy:")), keyEquivalent: "c"))
+        editMenu.addItem(NSMenuItem(title: "Paste", action: Selector(("paste:")), keyEquivalent: "v"))
+        editMenu.addItem(NSMenuItem(title: "Select All", action: Selector(("selectAll:")), keyEquivalent: "a"))
         
         NSApp.mainMenu = mainMenu
     }

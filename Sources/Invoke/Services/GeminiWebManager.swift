@@ -14,7 +14,7 @@ class InteractiveWebView: WKWebView {
     override func becomeFirstResponder() -> Bool { return true }
 }
 
-/// Native Gemini Bridge - v15.0 (Serialized & Robust)
+/// Native Gemini Bridge - v15.1 (Serialized & Robust & Build Fixed)
 /// 纯后台 JS 注入架构，彻底解决主线程死锁问题，增加请求队列防止并发崩溃
 @MainActor
 class GeminiWebManager: NSObject, ObservableObject {
@@ -362,11 +362,10 @@ extension GeminiWebManager: WKNavigationDelegate, WKScriptMessageHandler {
                     self.responseCallback = nil
                 }
                 
-                // 触发 Vibe Coding 逻辑 (保持原有功能)
+                // 触发 Vibe Coding 逻辑
+                // 修正：移除 await，因为 processResponse 内部已经是异步的
                 if !content.isEmpty && !content.hasPrefix("Error:") {
-                    Task {
-                        await GeminiLinkLogic.shared.processResponse(content)
-                    }
+                    GeminiLinkLogic.shared.processResponse(content)
                 }
             }
             
@@ -404,7 +403,7 @@ extension GeminiWebManager {
     
     static let injectedScript = """
     (function() {
-        console.log("🚀 Bridge v15 (Headless/Queue) Initializing...");
+        console.log("🚀 Bridge v15.1 (Headless/Queue) Initializing...");
         
         window.__fetchBridge = {
             sendPrompt: function(text, id) {

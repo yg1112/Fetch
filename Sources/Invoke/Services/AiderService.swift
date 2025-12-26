@@ -1,7 +1,7 @@
 import Foundation
 import Combine
 
-/// Aider Service v3.2 - Stable Pipe & Throttled UI & Full Config Support
+/// Aider Service v3.3 - Stable Pipe & Throttled UI & Full Config Support
 @MainActor
 class AiderService: ObservableObject {
     static let shared = AiderService()
@@ -210,7 +210,8 @@ class AiderService: ObservableObject {
             isThinking = true
         }
         
-        if var lastMsg = messages.last, !lastMsg.isUser {
+        // 修正：使用 let 避免警告，因为 struct 是值类型，这里并没有原地修改
+        if let lastMsg = messages.last, !lastMsg.isUser {
             let newContent = lastMsg.content + cleanText
             messages[messages.count - 1] = ChatMessage(content: newContent, isUser: false)
         } else {

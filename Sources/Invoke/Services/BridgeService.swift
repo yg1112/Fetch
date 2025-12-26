@@ -1,8 +1,8 @@
 import Foundation
 import Combine
 
-/// Bridge Service v2.0 - Native WKWebView 实现
-/// 不再需要 Python proxy，直接使用 GeminiWebManager
+/// Bridge Service v2.1 - Native WKWebView 实现
+/// 适配 v15.0 的 Async/Await 架构
 @MainActor
 class BridgeService: ObservableObject {
     static let shared = BridgeService()
@@ -53,6 +53,7 @@ class BridgeService: ObservableObject {
     }
     
     /// 发送 Prompt 到 Gemini
+    /// 适配新的 Async 队列架构
     func sendPrompt(_ text: String, model: String = "default", completion: @escaping (String) -> Void) {
         guard isLoggedIn else {
             showLoginWindow()
@@ -60,7 +61,18 @@ class BridgeService: ObservableObject {
             return
         }
         
-        webManager.sendPrompt(text, model: model, completion: completion)
+        Task {
+            do {
+                let response = try await webManager.askGemini(prompt: text, model: model)
+                DispatchQueue.main.async {
+                    completion(response)
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    completion("Error: \(error.localizedDescription)")
+                }
+            }
+        }
     }
     
     /// 检查健康状态
