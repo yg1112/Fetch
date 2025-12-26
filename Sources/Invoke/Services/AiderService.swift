@@ -1,8 +1,7 @@
 import Foundation
 import Combine
 
-/// Aider Service v3.0 - Robust Process Wrapper
-/// 架构：User Input -> Aider Process (stdin) -> Local API -> Gemini -> Aider -> Fetch UI (stdout)
+/// Aider Service v3.2 - Stable Pipe & Throttled UI & Full Config Support
 @MainActor
 class AiderService: ObservableObject {
     static let shared = AiderService()
@@ -18,6 +17,10 @@ class AiderService: ObservableObject {
     private var outputPipe: Pipe?
     private var errorPipe: Pipe?
     
+    // UI 节流器
+    private let uiThrottler = Throttler(minimumDelay: 0.1)
+    private var pendingOutputBuffer = ""
+    
     struct ChatMessage: Identifiable, Equatable {
         let id = UUID()
         let content: String
@@ -27,7 +30,7 @@ class AiderService: ObservableObject {
     
     // MARK: - Aider Process Management
     
-    /// 智能查找 Aider 路径
+    /// 完整的路径查找逻辑 (Config > Shell > Common Paths)
     private func findAiderPath() -> String? {
         // 1. 优先从配置文件读取
         let configDir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
@@ -42,13 +45,12 @@ class AiderService: ObservableObject {
             return path
         }
         
-        // 2. 使用 shell 动态查找
+        // 2. Shell 动态查找
         let whichProcess = Process()
         whichProcess.executableURL = URL(fileURLWithPath: "/bin/bash")
         whichProcess.arguments = ["-c", "which aider"]
         let whichPipe = Pipe()
         whichProcess.standardOutput = whichPipe
-        
         try? whichProcess.run()
         whichProcess.waitUntilExit()
         
@@ -65,7 +67,8 @@ class AiderService: ObservableObject {
             "/opt/homebrew/bin/aider",
             "\(home)/.local/bin/aider",
             "/usr/bin/aider",
-            "\(home)/anaconda3/bin/aider"
+            "\(home)/anaconda3/bin/aider",
+            "\(home)/miniconda3/bin/aider"
         ]
         
         for path in paths {
@@ -76,18 +79,16 @@ class AiderService: ObservableObject {
     }
     
     func startAider(projectPath: String) {
-        stop() // 确保之前的进程已清理
+        stop()
         
         currentProject = projectPath
         initializationStatus = "Starting Local API..."
         
-        // 1. 确保 API Server 已启动 (关键修复)
+        // 确保 API Server 启动
         LocalAPIServer.shared.start()
-        let apiPort = LocalAPIServer.shared.port
         
         guard let aiderPath = findAiderPath() else {
-            appendSystemMessage("❌ Aider executable not found.")
-            appendSystemMessage("💡 Please install aider: pip install aider-chat")
+            appendSystemMessage("❌ Aider executable not found. Please install: pip install aider-chat")
             return
         }
         
@@ -97,27 +98,26 @@ class AiderService: ObservableObject {
         process.executableURL = URL(fileURLWithPath: aiderPath)
         process.currentDirectoryURL = URL(fileURLWithPath: projectPath)
         
-        // 环境配置
         var env = ProcessInfo.processInfo.environment
-        env["AIDER_NO_AUTO_COMMIT"] = "1" // 防止自动 Commit，由用户控制
-        env["TERM"] = "xterm-256color"    // 确保颜色输出正确
+        env["AIDER_NO_AUTO_COMMIT"] = "1"
+        env["TERM"] = "xterm-256color"
         env["PYTHONIOENCODING"] = "utf-8"
         process.environment = env
         
-        // 参数配置：连接到我们的 Local API
+        // 连接到 Local API
         process.arguments = [
-            "--model", "openai/gemini-2.0-flash", // 指向我们的本地代理模型
-            "--openai-api-base", "http://127.0.0.1:\(apiPort)/v1",
-            "--openai-api-key", "sk-dummy-key",   // 任意 Key
-            "--no-git",       // 我们自己处理 git 或由用户手动处理
-            "--yes",          // 自动确认
+            "--model", "openai/gemini-2.0-flash",
+            "--openai-api-base", "http://127.0.0.1:\(LocalAPIServer.shared.port)/v1",
+            "--openai-api-key", "sk-dummy-key",
+            "--no-git",
+            "--yes",
             "--no-show-model-warnings",
-            "--dark-mode"     // 强制暗色模式适配 UI
+            "--dark-mode"
         ]
         
         let inPipe = Pipe()
         let outPipe = Pipe()
-        let errPipe = Pipe() // 分离 stderr (关键修复：防止死锁)
+        let errPipe = Pipe() // 分离管道
         
         process.standardInput = inPipe
         process.standardOutput = outPipe
@@ -127,22 +127,25 @@ class AiderService: ObservableObject {
         self.outputPipe = outPipe
         self.errorPipe = errPipe
         
-        // 处理标准输出
+        // Stdout -> Throttled UI
         outPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
-            guard !data.isEmpty else { return }
+            guard !data.isEmpty, let self = self else { return }
             if let str = String(data: data, encoding: .utf8) {
                 DispatchQueue.main.async {
-                    self?.handleAiderOutput(str)
+                    self.pendingOutputBuffer += str
+                    self.uiThrottler.throttle {
+                        self.flushOutputBuffer()
+                    }
                 }
             }
         }
         
-        // 处理错误输出 (记录日志但不直接显示在聊天气泡中，除非是致命错误)
+        // Stderr -> Log (防止阻塞)
         errPipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
             if let str = String(data: data, encoding: .utf8), !str.isEmpty {
-                print("[Aider Error] \(str)")
+                // print("[Aider Error] \(str)") // 可选：打印日志
             }
         }
         
@@ -168,52 +171,49 @@ class AiderService: ObservableObject {
     
     // MARK: - Messaging
     
-    /// 发送消息给 Aider 进程
     func sendUserMessage(_ text: String) {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         
-        // 1. UI 立即显示
         messages.append(ChatMessage(content: text, isUser: true))
         isThinking = true
         
-        // 2. 写入管道 (核心修复：不再绕过 Aider)
         if let pipe = inputPipe, isRunning {
-            let cleanText = text.replacingOccurrences(of: "\n", with: " ") // 单行发送避免多行问题
+            let cleanText = text.replacingOccurrences(of: "\n", with: " ")
             if let data = "\(cleanText)\n".data(using: .utf8) {
                 try? pipe.fileHandleForWriting.write(contentsOf: data)
             }
         } else {
-            appendSystemMessage("⚠️ Aider is not running. Please restart the session.")
+            appendSystemMessage("⚠️ Aider is not running.")
             isThinking = false
         }
     }
     
-    /// 处理 Aider 的输出流
-    private func handleAiderOutput(_ text: String) {
-        // 清理 ANSI 转义序列 (颜色代码)
+    // MARK: - Output Throttling
+    
+    private func flushOutputBuffer() {
+        guard !pendingOutputBuffer.isEmpty else { return }
+        let text = pendingOutputBuffer
+        pendingOutputBuffer = ""
+        
+        // 清理 ANSI
         let cleanText = text.replacingOccurrences(
             of: "\\x1B(?:\\[[0-9;]*[mK]?)",
             with: "",
             options: .regularExpression
         )
         
-        guard !cleanText.isEmpty else { return }
+        if cleanText.isEmpty { return }
         
-        // 简单的状态机：检测是否在等待输入
         if cleanText.contains("> ") || cleanText.contains("? ") {
             isThinking = false
         } else {
-            // 如果收到大量文本，可能正在生成
             isThinking = true
         }
         
-        // 合并连续的 Aider 消息，避免刷屏
         if var lastMsg = messages.last, !lastMsg.isUser {
-            // 如果上一条也是 Aider 的消息，追加内容
             let newContent = lastMsg.content + cleanText
             messages[messages.count - 1] = ChatMessage(content: newContent, isUser: false)
         } else {
-            // 新消息
             messages.append(ChatMessage(content: cleanText, isUser: false))
         }
     }
@@ -221,7 +221,6 @@ class AiderService: ObservableObject {
     // MARK: - Lifecycle
     
     func stop() {
-        // 清理 Handler 防止内存泄漏和崩溃
         outputPipe?.fileHandleForReading.readabilityHandler = nil
         errorPipe?.fileHandleForReading.readabilityHandler = nil
         
@@ -241,5 +240,28 @@ class AiderService: ObservableObject {
     
     func clearMessages() {
         messages.removeAll()
+    }
+}
+
+// 节流器工具类
+class Throttler {
+    private var workItem: DispatchWorkItem = DispatchWorkItem(block: {})
+    private var previousRun: Date = Date.distantPast
+    private let queue: DispatchQueue
+    private let minimumDelay: TimeInterval
+
+    init(minimumDelay: TimeInterval, queue: DispatchQueue = DispatchQueue.main) {
+        self.minimumDelay = minimumDelay
+        self.queue = queue
+    }
+
+    func throttle(_ block: @escaping () -> Void) {
+        workItem.cancel()
+        workItem = DispatchWorkItem() { [weak self] in
+            self?.previousRun = Date()
+            block()
+        }
+        let delay = previousRun.timeIntervalSinceNow > -minimumDelay ? minimumDelay : 0
+        queue.asyncAfter(deadline: .now() + delay, execute: workItem)
     }
 }
