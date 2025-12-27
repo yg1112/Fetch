@@ -21,7 +21,6 @@ let package = Package(
             dependencies: [
             ],
             resources: [
-                .process("AppIcon.icns")
             ]
         ),
     ]
