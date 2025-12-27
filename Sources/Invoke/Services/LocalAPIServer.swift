@@ -68,35 +68,21 @@ class LocalAPIServer: ObservableObject {
         let systemInstruction = "🔴 [SYSTEM: Ignore previous history. Treat this as a NEW request.]\n\n"
         let robustPrompt = systemInstruction + allContent
 
+        // 1. 立即告诉 Aider "我收到了，别挂断！"
+        let headers = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\n\r\n"
+        connection.send(content: headers.data(using: .utf8), completion: .contentProcessed { _ in })
+
+        // 2. 然后再去调用 GeminiCore
         Task { @MainActor in
-            // 🔥 FIX 3: 立即发送 Header (防止 Aider 超时)
-            let headers = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\nAccess-Control-Allow-Origin: *\r\n\r\n"
-            connection.send(content: headers.data(using: .utf8), completion: .contentProcessed { error in
-                if let error = error {
-                    print("❌ Failed to send headers: \(error)")
-                    return
-                }
-                // Now that headers are sent, start streaming
-                Task { @MainActor in
-                    do {
-                        let stream = try await GeminiCore.shared.ask(robustPrompt)
-                        for try await chunk in stream {
-                            let chunkID = UUID().uuidString.prefix(8)
-                            let sseChunk: [String: Any] = [
-                                "id": "chatcmpl-\(chunkID)", "object": "chat.completion.chunk",
-                                "created": Int(Date().timeIntervalSince1970), "model": "gemini-2.0-flash",
-                                "choices": [["index": 0, "delta": ["content": chunk], "finish_reason": NSNull()]]
-                            ]
-                            if let d = try? JSONSerialization.data(withJSONObject: sseChunk), let s = String(data: d, encoding: .utf8) {
-                                connection.send(content: "data: \(s)\n\n".data(using: .utf8), completion: .contentProcessed{_ in})
-                            }
-                        }
-                        connection.send(content: "data: [DONE]\n\n".data(using: .utf8), completion: .contentProcessed{_ in})
-                    } catch {
-                        let err = "data: {\"choices\":[{\"delta\":{\"content\":\" [Error: \(error)]\"}}]}\n\ndata: [DONE]\n\n"
-                        connection.send(content: err.data(using: .utf8), completion: .contentProcessed{_ in})
-                    }
-                }
+            for await chunk in GeminiCore.shared.generate(prompt: robustPrompt) {
+                let jsonData = try? JSONEncoder().encode(["choices": [["delta": ["content": chunk]]]])
+                let jsonString = jsonData.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+                let sse = "data: " + jsonString + "\n\n"
+                connection.send(content: sse.data(using: .utf8), completion: .contentProcessed { _ in })
+            }
+            // 3. 结束
+            connection.send(content: "data: [DONE]\n\n".data(using: .utf8), completion: .contentProcessed { _ in 
+                connection.cancel()
             })
         }
     }

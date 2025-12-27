@@ -1,47 +1,54 @@
+import Cocoa
 import SwiftUI
-import AppKit
 
+// 应用入口：极致轻量
 class AppDelegate: NSObject, NSApplicationDelegate {
-    var statusItem: NSStatusItem?
+    var statusItem: NSStatusItem!
     
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // 1. 启动服务器
+        // 1. 启动 Woz 的服务器
         LocalAPIServer.shared.start()
         
-        // 2. 设置菜单栏
-        setupMenuBar()
+        // 2. 启动 Jobs 的浏览器核心
+        GeminiCore.shared.prepare()
         
-        // 3. 启动浏览器核心 (它会自动判断是否需要弹窗登录)
-        GeminiCore.shared.load()
+        // 3. 在菜单栏画一个小点
+        setupStatusBar()
     }
     
     @MainActor
-    func setupMenuBar() {
+    func setupStatusBar() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        if let button = statusItem?.button {
-            button.image = NSImage(systemSymbolName: "brain.head.profile", accessibilityDescription: "Fetch")
+        if let button = statusItem.button {
+            // 初始状态：灰色（未就绪）
+            button.image = NSImage(systemSymbolName: "circle", accessibilityDescription: "Fetch")
         }
         
         let menu = NSMenu()
-        menu.addItem(NSMenuItem(title: "Show Gemini Window", action: #selector(showWindow), keyEquivalent: "o"))
+        menu.addItem(NSMenuItem(title: "Show Brain", action: #selector(showWindow), keyEquivalent: "o"))
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
-        statusItem?.menu = menu
+        statusItem.menu = menu
         
-        // 绑定状态更新
-        GeminiCore.shared.onStatusChange = { [weak self] isLoggedIn in
+        // 绑定状态：绿色=就绪，红色=需登录
+        GeminiCore.shared.onStateChange = { [weak self] state in
             DispatchQueue.main.async {
-                let symbol = isLoggedIn ? "brain.head.profile" : "exclamationmark.triangle"
-                self?.statusItem?.button?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
-                // 如果未登录，自动弹出窗口
-                if !isLoggedIn { self?.showWindow() }
+                let symbol = state == .ready ? "circle.fill" : "exclamationmark.triangle"
+                let color: NSColor = state == .ready ? .systemGreen : .systemRed
+                
+                let image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
+                    .withSymbolConfiguration(NSImage.SymbolConfiguration(paletteColors: [color]))
+                self?.statusItem.button?.image = image
+                
+                // 如果掉线了，自动弹窗让用户处理，这就叫“直觉”
+                if state == .needsLogin { self?.showWindow() }
             }
         }
     }
     
     @MainActor
     @objc func showWindow() {
-        GeminiCore.shared.showDebugWindow()
+        GeminiCore.shared.showWindow()
     }
 }
 

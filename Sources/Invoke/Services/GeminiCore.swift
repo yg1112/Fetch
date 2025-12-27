@@ -1,16 +1,18 @@
 import WebKit
-import SwiftUI
+import Cocoa
+
+enum CoreState { case initializing, needsLogin, ready }
 
 @MainActor
 class GeminiCore: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
     static let shared = GeminiCore()
     
-    // 状态回调
-    var onStatusChange: ((Bool) -> Void)?
-    
+    var onStateChange: ((CoreState) -> Void)?
     private var webView: WKWebView!
     private var window: NSWindow?
-    private var streamContinuation: CheckedContinuation<String, Error>?
+    
+    // 用于流式传输的 Continuation
+    private var activeContinuation: AsyncStream<String>.Continuation?
     
     override init() {
         super.init()
@@ -19,128 +21,130 @@ class GeminiCore: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
     
     private func setupWebView() {
         let config = WKWebViewConfiguration()
-        config.applicationNameForUserAgent = "Safari" // 伪装
         
-        // 注入核心 JS (轮询逻辑)
+        // Woz 的魔法脚本：极其稳健的注入
+        // 我们不猜时间，我们监听 DOM。
         let js = """
-        window.activeStream = null;
         window.bridge = {
-            post: (t, d) => window.webkit.messageHandlers.core.postMessage({t:t, d:d}),
-            generate: (p) => {
-                // 1. 极速轮询找输入框
-                let i = 0;
-                const timer = setInterval(() => {
+            log: (msg) => window.webkit.messageHandlers.core.postMessage({t:'LOG', d:msg}),
+            stream: (txt) => window.webkit.messageHandlers.core.postMessage({t:'TXT', d:txt}),
+            
+            // 核心任务：输入 Prompt 并点击发送
+            submit: (p) => {
+                const tryClick = () => {
                     const box = document.querySelector('div[contenteditable="true"]');
-                    if(box) {
-                        clearInterval(timer);
-                        box.focus(); document.execCommand('insertText', false, p);
-                        setTimeout(() => {
-                            const btn = document.querySelector('button[aria-label*="Send"]');
-                            if(btn) btn.click();
+                    if(!box) return false;
+                    box.focus();
+                    document.execCommand('insertText', false, p);
+                    
+                    // 等待发送按钮变绿
+                    setTimeout(() => {
+                        const btn = document.querySelector('button[aria-label*="Send"]');
+                        if(btn) { btn.click(); window.bridge.watch(); }
+                        else { 
+                            // 兜底：模拟回车
+                            box.dispatchEvent(new KeyboardEvent('keydown', {key:'Enter', keyCode:13, bubbles:true}));
                             window.bridge.watch();
-                        }, 100);
-                    }
-                    if(i++ > 50) { clearInterval(timer); window.bridge.post('ERR', 'No Input'); }
+                        }
+                    }, 50); 
+                    return true;
+                };
+                
+                // 轮询直到输入框出现（处理页面懒加载）
+                let attempts = 0;
+                const timer = setInterval(() => {
+                    if(tryClick() || attempts++ > 50) clearInterval(timer);
                 }, 100);
             },
+            
+            // 核心任务：监听回答
             watch: () => {
-                // 2. 监听输出
-                let lastLen = 0;
+                let lastTxt = "";
                 const obs = new MutationObserver(() => {
+                    // 找到最新的回答块
                     const els = document.querySelectorAll('.model-response-text');
                     if(els.length === 0) return;
-                    const txt = els[els.length-1].innerText;
-                    if(txt.length > lastLen) {
-                        window.bridge.post('CHK', txt.substring(lastLen));
-                        lastLen = txt.length;
+                    
+                    const newTxt = els[els.length-1].innerText;
+                    if(newTxt.length > lastTxt.length) {
+                        // 只发送增量部分，节省带宽
+                        window.bridge.stream(newTxt.substring(lastTxt.length));
+                        lastTxt = newTxt;
                     }
-                    // 检测生成结束 (简单的停止按钮消失检测)
-                    // ... (可添加更复杂的结束检测逻辑)
                 });
                 obs.observe(document.body, {subtree:true, childList:true, characterData:true});
             }
         };
         """
-        let script = WKUserScript(source: js, injectionTime: .atDocumentEnd, forMainFrameOnly: true)
-        config.userContentController.addUserScript(script)
+        
+        let userScript = WKUserScript(source: js, injectionTime: .atDocumentEnd, forMainFrameOnly: true)
+        config.userContentController.addUserScript(userScript)
         config.userContentController.add(self, name: "core")
         
         webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = self
-        // 关键：复用同一个 UA，避免被 Google 风控踢出
-        webView.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15"
+        // 伪装成 Safari Mac，防止被 Google 降级
+        webView.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3 Safari/605.1.15"
     }
     
-    func load() {
-        // 直接加载 Gemini，如果 Cookie 还在，就自动登录了
+    func prepare() {
+        // 加载页面。如果 Cookie 还在，它会自动登录。
         webView.load(URLRequest(url: URL(string: "https://gemini.google.com/app")!))
     }
     
-    // MARK: - 窗口逻辑 (按需显示)
+    // MARK: - 外部接口 (Called by LocalAPIServer)
     
-    func showDebugWindow() {
-        if window == nil {
-            window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 800),
-                            styleMask: [.titled, .closable, .resizable],
-                            backing: .buffered, defer: false)
-            window?.title = "Gemini Bridge"
-            window?.center()
-            window?.isReleasedWhenClosed = false // 关闭只是隐藏
-        }
-        // 关键：把 WebView 拍到窗口上
-        window?.contentView = webView 
-        window?.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
-    }
-    
-    // MARK: - 业务逻辑 (Ask)
-    
-    func ask(_ prompt: String) async throws -> AsyncStream<String> {
-        // 确保已登录
-        guard let url = webView.url?.absoluteString, url.contains("gemini.google.com") else {
-            showDebugWindow() // 强制弹窗登录
-            throw NSError(domain: "Auth", code: 401, userInfo: [NSLocalizedDescriptionKey: "Please login"])
-        }
-        
-        // 简单的 Prompt 转义
-        let safePrompt = prompt.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"").replacingOccurrences(of: "\n", with: "\\n")
-        
+    func generate(prompt: String) -> AsyncStream<String> {
         return AsyncStream { continuation in
-            // JS 调用
-            webView.evaluateJavaScript("window.bridge.generate(\"\(safePrompt)\")")
+            self.activeContinuation = continuation
             
-            // 这里我们需要一种机制把 scriptMessageHandler 的回调转给 stream
-            // 简单起见，可以用一个临时闭包变量 (生产环境可以用 Actor 或 Map 管理多个请求)
-            self.streamHandler = { type, data in
-                if type == "CHK" { continuation.yield(data) }
-                else if type == "ERR" { continuation.finish(); } // Handle error
-                // 需要完善 DONE 信号
-            }
+            // 安全转义 Prompt
+            let safePrompt = prompt.replacingOccurrences(of: "\\", with: "\\\\")
+                                   .replacingOccurrences(of: "\"", with: "\\\"")
+                                   .replacingOccurrences(of: "\n", with: "\\n")
+            
+            // 执行注入
+            webView.evaluateJavaScript("window.bridge.submit(\"\(safePrompt)\")")
         }
     }
     
-    private var streamHandler: ((String, String) -> Void)?
-    
-    // MARK: - WKScriptMessageHandler
+    // MARK: - WKScriptMessageHandler (Woz 的数据管道)
     
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         guard let body = message.body as? [String: Any],
-              let type = body["t"] as? String,
-              let data = body["d"] as? String else { return }
+              let type = body["t"] as? String else { return }
         
-        if type == "LOGIN_STATUS" {
-            // 可以在 JS 里检测是否在登录页，传回 Swift 更新状态栏
-        } else {
-            streamHandler?(type, data)
+        if type == "TXT", let text = body["d"] as? String {
+            activeContinuation?.yield(text)
         }
     }
     
-    // MARK: - Navigation Delegate
+    // MARK: - 状态管理 (Jobs 的用户体验)
     
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         let url = webView.url?.absoluteString ?? ""
-        // 简单的状态判断：是在 App 里还是在 登录页
-        let isLoggedIn = url.contains("gemini.google.com/app")
-        onStatusChange?(isLoggedIn)
+        if url.contains("gemini.google.com/app") {
+            print("Login Success")
+            onStateChange?(.ready)
+            window?.close() // 登录成功？把窗口关了。别打扰用户。
+        } else if url.contains("accounts.google.com") {
+            print("Needs Login")
+            onStateChange?(.needsLogin)
+            // 这里不自动弹窗，状态栏会变红，由用户点击弹出，没那么突兀
+        }
+    }
+    
+    func showWindow() {
+        if window == nil {
+            window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1024, height: 768),
+                            styleMask: [.titled, .closable, .resizable, .miniaturizable],
+                            backing: .buffered, defer: false)
+            window?.center()
+            window?.title = "Gemini Bridge"
+            window?.contentView = webView
+            window?.isReleasedWhenClosed = false
+        }
+        window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 }
