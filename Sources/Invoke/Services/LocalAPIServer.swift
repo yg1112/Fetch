@@ -68,20 +68,26 @@ class LocalAPIServer: ObservableObject {
         let systemInstruction = "🔴 [SYSTEM: Ignore previous history. Treat this as a NEW request.]\n\n"
         let robustPrompt = systemInstruction + allContent
 
-        // 1. 立即告诉 Aider "我收到了，别挂断！"
-        let headers = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\n\r\n"
-        connection.send(content: headers.data(using: .utf8), completion: .contentProcessed { _ in })
+        // 1. 抢先发送 Header (Latency Optimization)
+        let headers = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n"
+        connection.send(content: headers.data(using: .utf8), completion: .contentProcessed{_ in})
 
-        // 2. 然后再去调用 GeminiCore
-        Task { @MainActor in
-            for await chunk in GeminiCore.shared.generate(prompt: robustPrompt) {
-                let jsonData = try? JSONEncoder().encode(["choices": [["delta": ["content": chunk]]]])
-                let jsonString = jsonData.flatMap { String(data: $0, encoding: .utf8) } ?? ""
-                let sse = "data: " + jsonString + "\n\n"
-                connection.send(content: sse.data(using: .utf8), completion: .contentProcessed { _ in })
+        Task.detached {
+            // 2. 调用 
+            let stream = await GeminiCore.shared.generate(prompt: robustPrompt)
+            
+            for await chunk in stream {
+                // 3. 构建 OpenAI 格式的数据包
+                let json = ["choices": [["delta": ["content": chunk]]]]
+                if let data = try? JSONEncoder().encode(json),
+                   let str = String(data: data, encoding: .utf8) {
+                    let sse = "data: \(str)\n\n"
+                    connection.send(content: sse.data(using: .utf8), completion: .contentProcessed{_ in})
+                }
             }
-            // 3. 结束
-            connection.send(content: "data: [DONE]\n\n".data(using: .utf8), completion: .contentProcessed { _ in 
+            
+            // 4. 发送结束信号
+            connection.send(content: "data: [DONE]\n\n".data(using: .utf8), completion: .contentProcessed { _ in
                 connection.cancel()
             })
         }

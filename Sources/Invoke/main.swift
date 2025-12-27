@@ -6,14 +6,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem!
     
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // 1. 启动 Woz 的服务器
+        // 启动服务
         LocalAPIServer.shared.start()
         
-        // 2. 启动 Jobs 的浏览器核心
+        // 初始化 
         GeminiCore.shared.prepare()
         
-        // 3. 在菜单栏画一个小点
-        setupStatusBar()
+        // 甚至不需要状态栏图标，除非出错
+        // 或者只在 Menu Bar 显示一个极小的点
+        // ...
     }
     
     @MainActor
@@ -33,15 +34,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // 绑定状态：绿色=就绪，红色=需登录
         GeminiCore.shared.onStateChange = { [weak self] state in
             DispatchQueue.main.async {
-                let symbol = state == .ready ? "circle.fill" : "exclamationmark.triangle"
-                let color: NSColor = state == .ready ? .systemGreen : .systemRed
+                let symbol = state ? "circle.fill" : "exclamationmark.triangle"
+                let color: NSColor = state ? .systemGreen : .systemRed
                 
                 let image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
                     .withSymbolConfiguration(NSImage.SymbolConfiguration(paletteColors: [color]))
                 self?.statusItem.button?.image = image
                 
-                // 如果掉线了，自动弹窗让用户处理，这就叫“直觉”
-                if state == .needsLogin { self?.showWindow() }
+                // 如果掉线了，自动弹窗让用户处理，这就叫"直觉"
+                if !state { self?.showWindow() }
             }
         }
     }
