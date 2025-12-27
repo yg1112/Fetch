@@ -6,16 +6,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem!
     
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // 启动服务
+        // 1. 启动服务
         LocalAPIServer.shared.start()
         
-        // 初始化 
+        // 2. 初始化核心
         GeminiCore.shared.prepare()
         
-        // 设置菜单栏图标
+        // 3. 🔥【关键修复】初始化 UI (菜单栏图标)
+        // 必须显式调用这个方法，图标才会出现！
         setupStatusBar()
     }
     
+    // 这个方法需要确保在主线程执行
     @MainActor
     func setupStatusBar() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -27,6 +29,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let menu = NSMenu()
         menu.addItem(NSMenuItem(title: "Show Brain", action: #selector(showWindow), keyEquivalent: "o"))
         menu.addItem(NSMenuItem(title: "Reset Context", action: #selector(resetContext), keyEquivalent: "r"))
+        menu.addItem(NSMenuItem(title: "Force Reload WebView", action: #selector(forceReload), keyEquivalent: "R"))
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         statusItem.menu = menu
@@ -47,7 +50,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     .withSymbolConfiguration(NSImage.SymbolConfiguration(paletteColors: [color]))
                 self?.statusItem.button?.image = image
                 
-                // 如果掉线了，自动弹窗让用户处理，这就叫"直觉"
+                // 如果掉线了，自动弹窗让用户处理
                 if case .error = state { self?.showWindow() }
             }
         }
@@ -61,6 +64,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor
     @objc func resetContext() {
         GeminiCore.shared.reset()
+    }
+
+    @MainActor
+    @objc func forceReload() {
+        print("🔄 Force reloading WebView...")
+        GeminiCore.shared.forceReload()
     }
 }
 

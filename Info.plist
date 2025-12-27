@@ -9,7 +9,7 @@
 	<key>CFBundleIconname</key>
 	<string>AppIcon</string>
 	<key>LSUIElement</key>
-	<false/>
+	<true/>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
