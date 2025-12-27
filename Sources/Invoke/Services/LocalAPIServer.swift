@@ -35,12 +35,53 @@ class LocalAPIServer: ObservableObject {
     }
     
     private func handleConnection(_ connection: NWConnection) {
+        let connID = UUID().uuidString.prefix(8)
+        print("🔌 [LocalAPIServer] Connection \(connID) opened from \(connection.endpoint)")
+
+        connection.stateUpdateHandler = { state in
+            switch state {
+            case .ready:
+                print("   ✅ Connection \(connID) ready")
+            case .failed(let error):
+                print("   ❌ Connection \(connID) failed: \(error)")
+            case .cancelled:
+                print("   🚫 Connection \(connID) cancelled")
+            default:
+                break
+            }
+        }
+
         connection.start(queue: queue)
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, _, _ in
-            if let data = data, let req = String(data: data, encoding: .utf8) {
-                self?.processRequest(connection, req)
-            } else {
+
+        // CRITICAL FIX: Continuously receive requests on this connection (HTTP keep-alive)
+        self.receiveLoop(connection, connID: String(connID))
+    }
+
+    private func receiveLoop(_ connection: NWConnection, connID: String) {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isComplete, error in
+            if let error = error {
+                print("   ⚠️ Connection \(connID) receive error: \(error)")
                 connection.cancel()
+                return
+            }
+
+            if let data = data, let req = String(data: data, encoding: .utf8) {
+                print("   📥 Connection \(connID) received \(data.count) bytes")
+                self?.processRequest(connection, req)
+
+                // CRITICAL: Continue receiving on this connection (keep-alive)
+                if !isComplete {
+                    self?.receiveLoop(connection, connID: connID)
+                } else {
+                    print("   🔚 Connection \(connID) closed by client")
+                    connection.cancel()
+                }
+            } else if isComplete {
+                print("   🔚 Connection \(connID) closed (no data)")
+                connection.cancel()
+            } else {
+                // Continue receiving
+                self?.receiveLoop(connection, connID: connID)
             }
         }
     }
@@ -59,8 +100,14 @@ class LocalAPIServer: ObservableObject {
         if path.contains("/chat/completions") {
             handleChatCompletion(connection, body)
         } else {
-            let response = "HTTP/1.1 200 OK\r\n\r\n"
-            connection.send(content: response.data(using: .utf8), completion: .contentProcessed { _ in connection.cancel() })
+            // Keep-alive: don't cancel connection after sending response
+            let response = "HTTP/1.1 200 OK\r\nConnection: keep-alive\r\n\r\n"
+            connection.send(content: response.data(using: .utf8), completion: .contentProcessed { error in
+                if let error = error {
+                    print("   ⚠️ Failed to send health check: \(error)")
+                    connection.cancel()
+                }
+            })
         }
     }
     
@@ -75,8 +122,10 @@ class LocalAPIServer: ObservableObject {
         }
         
         let stream = json["stream"] as? Bool ?? false
-        
-        Task {
+
+        // CRITICAL FIX: Force Task to run on MainActor for WebKit thread safety
+        Task { @MainActor in
+            print("🔧 [LocalAPIServer] Task started on MainActor for prompt: \(prompt.prefix(30))...")
             do {
                 if stream {
                     // 1. 关键修复：立即发送 Header，防止客户端超时
@@ -90,13 +139,15 @@ class LocalAPIServer: ObservableObject {
                 }
                 
                 // 2. 执行耗时操作
-                // 增加超时控制 (60秒)
+                // CRITICAL FIX: Increase timeout to 120s (must be longer than WebView watchdog 90s)
                 let responseText = try await withThrowingTaskGroup(of: String.self) { group in
                     group.addTask {
                         return try await GeminiWebManager.shared.askGemini(prompt: prompt, isFromAider: true)
                     }
                     group.addTask {
-                        try await Task.sleep(nanoseconds: 60 * 1_000_000_000)
+                        // 120s timeout - allows watchdog (90s) + grace period
+                        try await Task.sleep(nanoseconds: 120 * 1_000_000_000)
+                        print("⏰ [LocalAPIServer] 120s timeout reached")
                         throw URLError(.timedOut)
                     }
                     let result = try await group.next()!
@@ -112,14 +163,24 @@ class LocalAPIServer: ObservableObject {
                 }
             } catch {
                 print("❌ Generation Error: \(error)")
-                // 如果已经发送了 Header (Stream 模式)，我们不能再发 500 了，只能断开
+                // 错误情况下也保持 keep-alive（让客户端决定是否重试）
                 if !stream {
-                    let errResp = "HTTP/1.1 500 Error\r\n\r\n{\"error\": \"\(error.localizedDescription)\"}"
-                    connection.send(content: errResp.data(using: .utf8), completion: .contentProcessed{ _ in connection.cancel() })
+                    let errResp = "HTTP/1.1 500 Error\r\nConnection: keep-alive\r\n\r\n{\"error\": \"\(error.localizedDescription)\"}"
+                    connection.send(content: errResp.data(using: .utf8), completion: .contentProcessed{ error in
+                        if let error = error {
+                            print("   ⚠️ Failed to send error response: \(error)")
+                            connection.cancel()
+                        }
+                    })
                 } else {
-                    // Stream 模式下发生错误，发送一个错误提示作为内容，或者直接断开
+                    // Stream 模式下发生错误，发送错误内容
                     let errChunk = "data: {\"choices\":[{\"delta\":{\"content\":\" [Error: \(error.localizedDescription)]\"}}]}\n\ndata: [DONE]\n\n"
-                    connection.send(content: errChunk.data(using: .utf8), completion: .contentProcessed{ _ in connection.cancel() })
+                    connection.send(content: errChunk.data(using: .utf8), completion: .contentProcessed{ error in
+                        if let error = error {
+                            print("   ⚠️ Failed to send error chunk: \(error)")
+                            connection.cancel()
+                        }
+                    })
                 }
             }
         }
@@ -128,8 +189,14 @@ class LocalAPIServer: ObservableObject {
     private func sendJSON(_ connection: NWConnection, _ dict: [String: Any]) {
         guard let data = try? JSONSerialization.data(withJSONObject: dict),
               let jsonStr = String(data: data, encoding: .utf8) else { return }
-        let response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n\(jsonStr)"
-        connection.send(content: response.data(using: .utf8), completion: .contentProcessed { _ in connection.cancel() })
+        // Keep-alive: add Connection header and don't cancel after sending
+        let response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: keep-alive\r\n\r\n\(jsonStr)"
+        connection.send(content: response.data(using: .utf8), completion: .contentProcessed { error in
+            if let error = error {
+                print("   ⚠️ Failed to send JSON response: \(error)")
+                connection.cancel()
+            }
+        })
     }
     
     private func sendStreamChunk(_ connection: NWConnection, text: String) {
@@ -141,7 +208,13 @@ class LocalAPIServer: ObservableObject {
             chunkData += "data: \(jsonStr)\n\n"
         }
         chunkData += "data: [DONE]\n\n"
-        
-        connection.send(content: chunkData.data(using: .utf8), completion: .contentProcessed { _ in connection.cancel() })
+
+        // Keep-alive: don't cancel after sending (streaming mode already sent keep-alive header)
+        connection.send(content: chunkData.data(using: .utf8), completion: .contentProcessed { error in
+            if let error = error {
+                print("   ⚠️ Failed to send stream chunk: \(error)")
+                connection.cancel()
+            }
+        })
     }
 }

@@ -216,14 +216,26 @@ class AiderService: ObservableObject {
     
     func sendUserMessage(_ text: String) {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        
+
         messages.append(ChatMessage(content: text, isUser: true))
         isThinking = true
-        
+
         if let pipe = inputPipe, isRunning {
             let cleanText = text.replacingOccurrences(of: "\n", with: " ")
             if let data = "\(cleanText)\n".data(using: .utf8) {
-                try? pipe.fileHandleForWriting.write(contentsOf: data)
+                // 关键修复：在后台线程写入 stdin，避免阻塞主线程造成死锁
+                DispatchQueue.global(qos: .userInitiated).async {
+                    do {
+                        try pipe.fileHandleForWriting.write(contentsOf: data)
+                        print("✅ [Aider] Sent message to stdin: \(cleanText.prefix(30))...")
+                    } catch {
+                        print("❌ [Aider] Failed to write to stdin: \(error)")
+                        DispatchQueue.main.async {
+                            self.appendSystemMessage("⚠️ Failed to send message to Aider")
+                            self.isThinking = false
+                        }
+                    }
+                }
             }
         } else {
             appendSystemMessage("⚠️ Aider is not running.")

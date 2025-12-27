@@ -65,13 +65,16 @@ class GeminiWebManager: NSObject, ObservableObject {
         let (stream, continuation) = AsyncStream<PendingRequest>.makeStream()
         self.requestStream = continuation
 
-        self.requestTask = Task {
+        // CRITICAL: Ensure request loop runs on MainActor for WebKit safety
+        self.requestTask = Task { @MainActor in
+            print("🔧 [Queue] Request loop started on MainActor")
             for await request in stream {
                 while !self.isReady { try? await Task.sleep(nanoseconds: 500_000_000) }
 
                 // 设置标记：当前请求是否来自 Aider
                 self.isCurrentRequestFromAider = request.isFromAider
                 print("🚀 [Queue] Processing: \(request.prompt.prefix(15))... (isFromAider=\(request.isFromAider))")
+                print("   Queue thread: \(Thread.isMainThread ? "MAIN ✓" : "BACKGROUND ⚠️")")
 
                 do {
                     let response = try await self.performActualNetworkRequest(request.prompt, model: request.model)
@@ -181,13 +184,31 @@ class GeminiWebManager: NSObject, ObservableObject {
                                       .replacingOccurrences(of: "\"", with: "\\\"")
                                       .replacingOccurrences(of: "\n", with: "\\n")
 
+                // DETAILED PRE-FLIGHT DIAGNOSTICS
+                print("📤 [GeminiWebManager] Pre-flight check:")
+                print("   WebView: \(self.webView != nil ? "alive" : "nil")")
+                print("   isLoading: \(self.webView.isLoading)")
+                print("   URL: \(self.webView.url?.absoluteString ?? "none")")
+                print("   Current thread: \(Thread.isMainThread ? "MAIN ✓" : "BACKGROUND ⚠️")")
+
                 let js = "window.__fetchBridge.sendPrompt(\"\(escapedText)\", \"\(promptId)\");"
                 print("📤 [GeminiWebManager] Executing JS: sendPrompt (id=\(promptId.prefix(8))...)")
+
+                let startTime = Date()
                 self.webView.evaluateJavaScript(js) { result, error in
+                    let elapsed = Date().timeIntervalSince(startTime)
+                    print("   ⏱️ Callback fired after \(String(format: "%.3f", elapsed))s")
+                    print("   Callback thread: \(Thread.isMainThread ? "MAIN ✓" : "BACKGROUND ⚠️")")
+
                     if let error = error {
                         print("   ❌ JS Error: \(error.localizedDescription)")
+                        print("   Error domain: \(error._domain)")
+                        print("   Error code: \(error._code)")
                     } else {
                         print("   ✅ JS executed successfully")
+                        if let result = result {
+                            print("   Result: \(result)")
+                        }
                     }
                 }
             }
@@ -899,39 +920,49 @@ extension GeminiWebManager {
 
             // ===== Part 3: 按钮状态检测 =====
             isGenerating: function() {
-                // 检查 Stop 按钮是否存在（生成中会显示）
+                // ENHANCED: Check multiple button states with detailed logging
+
+                // 1. Stop button (most reliable indicator)
                 const stopBtn = document.querySelector(
                     'button[aria-label*="Stop"], button[aria-label*="stop"], ' +
                     'button[data-tooltip*="Stop"], button[title*="Stop"], ' +
-                    'button[aria-label*="Cancel"], button[aria-label*="cancel"]'
+                    'button[aria-label*="Cancel"], button[aria-label*="cancel"], ' +
+                    'button[class*="stop" i], button[class*="cancel" i]'
                 );
                 if (stopBtn && stopBtn.offsetParent !== null) {
+                    // Visible Stop button = definitely generating
                     return true;
                 }
 
-                // 检查 Send 按钮是否禁用
+                // 2. Send button disabled
                 const sendBtn = document.querySelector(
                     'button[aria-label*="Send"], button[aria-label*="send"], ' +
-                    'button[data-tooltip*="Send"]'
+                    'button[data-tooltip*="Send"], button[class*="send" i]'
                 );
                 if (sendBtn && sendBtn.disabled) {
                     return true;
                 }
 
-                // 检查是否有 "Thinking" 或加载指示器
-                const mainEl = document.querySelector('main');
-                if (mainEl) {
-                    const text = mainEl.innerText;
-                    if (text.includes('Thinking') || text.includes('...')) {
-                        // 但要排除已经有实质内容的情况
-                        const responseEl = this.getResponseElement();
-                        if (responseEl) {
-                            const responseText = responseEl.innerText.trim();
-                            // 如果回复只是 "Thinking..." 则还在生成
-                            if (responseText === 'Thinking...' || responseText === 'Thinking' || responseText.length < 5) {
-                                return true;
-                            }
+                // 3. Check for loading/typing indicators
+                const loadingIndicators = document.querySelectorAll(
+                    '[role="progressbar"], [class*="loading" i], [class*="typing" i], ' +
+                    '[class*="generating" i], [data-testid*="loading"]'
+                );
+                if (loadingIndicators.length > 0) {
+                    for (const indicator of loadingIndicators) {
+                        if (indicator.offsetParent !== null) {
+                            return true;  // Visible loading indicator
                         }
+                    }
+                }
+
+                // 4. Check if response is still empty/short (might be generating)
+                const responseEl = this.getResponseElement();
+                if (responseEl) {
+                    const responseText = responseEl.innerText.trim();
+                    // If response only contains "Thinking..." or is very short, might still be generating
+                    if (responseText === 'Thinking...' || responseText === 'Thinking' || responseText.length < 5) {
+                        return true;
                     }
                 }
 
@@ -1202,16 +1233,35 @@ extension GeminiWebManager {
 
             // ===== 强制完成（超时调用） =====
             forceFinish: function(id) {
-                this.log("⚠️ Force finish called");
+                this.log("⚠️ Force finish called - 90s timeout reached");
+
+                // DIAGNOSTIC: Log DOM state for debugging
+                const stopBtn = document.querySelector('button[aria-label*="Stop"], button[aria-label*="stop"]');
+                const sendBtn = document.querySelector('button[aria-label*="Send"], button[aria-label*="send"]');
+                this.log("   DOM State:");
+                this.log("     Stop button: " + (stopBtn ? (stopBtn.offsetParent ? "visible" : "hidden") : "not found"));
+                this.log("     Send button: " + (sendBtn ? (sendBtn.disabled ? "disabled" : "enabled") : "not found"));
+                this.log("     isGenerating(): " + this.isGenerating());
+                this.log("     Current state: " + this.state);
 
                 // 尝试提取现有内容
                 const responseEl = this.getResponseElement();
                 let content = responseEl ? responseEl.innerText.trim() : '';
 
-                if (content && content.length > 0 && content !== this.lastSentText) {
+                this.log("   Extracted content length: " + (content ? content.length : 0));
+                if (content && content.length > 0) {
+                    this.log("   Content preview: " + content.substring(0, 100));
+                }
+
+                if (content && content.length > 50 && content !== this.lastSentText) {
+                    this.log("   ✅ Force finish found valid content");
+                    this.finish(id, content);
+                } else if (content && content.length > 0 && content !== this.lastSentText) {
+                    this.log("   ⚠️ Force finish found short content (might be incomplete)");
                     this.finish(id, content);
                 } else {
-                    this.finish(id, 'Error: Timeout - Could not extract response');
+                    this.log("   ❌ Force finish found no valid content");
+                    this.finish(id, 'Error: Timeout - Could not extract response after 90s');
                 }
             },
 
