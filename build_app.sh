@@ -53,31 +53,9 @@ if [ -f "AppIcon.icns" ]; then
     cp AppIcon.icns "$RESOURCES/"
 fi
 
-# 6. Copy Sparkle framework
-echo "📦 Step 6: Copying Sparkle framework..."
-if [ -d ".build/release/Sparkle.framework" ]; then
-    cp -R .build/release/Sparkle.framework "$FRAMEWORKS/"
-    echo "✓ Sparkle framework copied"
-else
-    echo "⚠️  Warning: Sparkle.framework not found in .build/release/"
-    if [ -d ".build/debug/Sparkle.framework" ]; then
-        cp -R .build/debug/Sparkle.framework "$FRAMEWORKS/"
-        echo "✓ Sparkle framework copied from debug build"
-    fi
-fi
-
-# 6.5. Fix rpath
-echo "📦 Step 6.5: Fixing runtime search paths..."
-if [ -f "$MACOS/$APP_NAME" ]; then
-    install_name_tool -add_rpath "@executable_path/../Frameworks" "$MACOS/$APP_NAME" 2>/dev/null || true
-fi
-
-# 7. Sign the app
+# 6. Sign the app
 echo ""
-echo "🔐 Step 7: Signing application..."
-if [ -d "$FRAMEWORKS/Sparkle.framework" ]; then
-    codesign --force --deep --sign - "$FRAMEWORKS/Sparkle.framework"
-fi
+echo "🔐 Step 6: Signing application..."
 codesign --force --deep --sign - --entitlements Entitlements.plist "$APP_BUNDLE"
 
 echo ""

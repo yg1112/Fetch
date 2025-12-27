@@ -63,10 +63,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         
         editMenu.addItem(NSMenuItem.separator())
         
-        editMenu.addItem(NSMenuItem(title: "Cut", action: Selector(("cut:")), keyEquivalent: "x"))
-        editMenu.addItem(NSMenuItem(title: "Copy", action: Selector(("copy:")), keyEquivalent: "c"))
-        editMenu.addItem(NSMenuItem(title: "Paste", action: Selector(("paste:")), keyEquivalent: "v"))
-        editMenu.addItem(NSMenuItem(title: "Select All", action: Selector(("selectAll:")), keyEquivalent: "a"))
+        editMenu.addItem(NSMenuItem(title: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x"))
+        editMenu.addItem(NSMenuItem(title: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c"))
+        editMenu.addItem(NSMenuItem(title: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v"))
+        editMenu.addItem(NSMenuItem(title: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a"))
         
         NSApp.mainMenu = mainMenu
     }
@@ -161,10 +161,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             panel.hasShadow = true
             panel.minSize = NSSize(width: 380, height: 200)
             
-            let appUI = AppUI(
-                onSettings: {},
-                onQuit: { NSApplication.shared.terminate(nil) }
-            )
+            let appUI = ContentView()
             
             let hostingView = NSHostingView(rootView: appUI)
             hostingView.autoresizingMask = [.width, .height]

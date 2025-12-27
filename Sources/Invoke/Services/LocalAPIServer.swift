@@ -11,15 +11,7 @@ class LocalAPIServer: ObservableObject {
     
     func start() {
         if isRunning && listener != nil { return }
-        // 尝试自动注入 Cookie (无感登录)
-        if !GeminiWebManager.shared.isLoggedIn {
-            ChromeBridge.shared.fetchCookiesFromChrome { result in
-                if case .success(let cookies) = result {
-                    print("🍪 Auto-injected cookies")
-                    GeminiWebManager.shared.injectRawCookies(cookies) { GeminiWebManager.shared.loadGemini() }
-                }
-            }
-        }
+        // Removed auto-inject logic for better UX
         for tryPort in UInt16(3000)...UInt16(3010) {
             if startListener(on: tryPort) {
                 self.port = tryPort; self.isRunning = true
@@ -45,7 +37,7 @@ class LocalAPIServer: ObservableObject {
 
     private func receiveLoop(_ connection: NWConnection) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isComplete, error in
-            if let error = error { connection.cancel(); return }
+            if error != nil { connection.cancel(); return }
             if let data = data, let req = String(data: data, encoding: .utf8) {
                 self?.processRequest(connection, req)
                 if !isComplete { self?.receiveLoop(connection) }
@@ -78,7 +70,7 @@ class LocalAPIServer: ObservableObject {
 
         Task { @MainActor in
             // 🔥 FIX 3: 立即发送 Header (防止 Aider 超时)
-            let headers = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\n\r\n"
+            let headers = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\nAccess-Control-Allow-Origin: *\r\n\r\n"
             connection.send(content: headers.data(using: .utf8), completion: .contentProcessed { _ in })
 
             do {

@@ -48,14 +48,7 @@ $(date)
 ## Changes
 - Fixed Swift 6 concurrency warnings (@MainActor on GeminiWebManager)
 - Removed unused variable warnings
-- Production-ready build with Protocol v3 support
 - Aider integration documentation
-
-## Protocol v3
-This release includes full support for Protocol v3 file editing:
-- Format: \`>>> INVOKE\` followed by \`!!!FILE_START!!!\` blocks
-- Direct clipboard-based file editing
-- Complete file content required
 
 ## Aider Integration
 Use Fetch as a proxy for Aider:

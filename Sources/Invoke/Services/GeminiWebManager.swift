@@ -6,6 +6,13 @@ import Combine
 class GeminiWebManager: NSObject, ObservableObject, WKScriptMessageHandler, WKNavigationDelegate {
     static let shared = GeminiWebManager()
     
+    // Static properties for shared configuration
+    static let userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15"
+    static let fingerprintMaskScript = """
+    // Basic fingerprint masking
+    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+    """
+    
     @Published var isReady = false
     @Published var isLoggedIn = false
     @Published var connectionStatus = "Initializing..."
@@ -42,6 +49,18 @@ class GeminiWebManager: NSObject, ObservableObject, WKScriptMessageHandler, WKNa
         let js = "document.cookie = '\(cookieText.replacingOccurrences(of: "'", with: "\\'"))';"
         webView.evaluateJavaScript(js) { _, _ in completion() }
     }
+    
+    func checkLoginStatus() {
+        let js = "!!document.querySelector('div[contenteditable=\"true\"]')"
+        webView.evaluateJavaScript(js) { [weak self] result, error in
+            if let loggedIn = result as? Bool {
+                DispatchQueue.main.async {
+                    self?.isLoggedIn = loggedIn
+                    self?.connectionStatus = loggedIn ? "🟢 Connected" : "🔴 Need Login"
+                }
+            }
+        }
+    }
 
     func streamAskGemini(prompt: String, onChunk: @escaping (String) -> Void) async throws -> String {
         guard isReady else { throw NSError(domain: "Gemini", code: 503, userInfo: [NSLocalizedDescriptionKey: "WebView not ready"]) }
@@ -72,24 +91,40 @@ class GeminiWebManager: NSObject, ObservableObject, WKScriptMessageHandler, WKNa
                 }
             },
             startGeneration: function(prompt) {
-                const input = document.querySelector('div[contenteditable="true"]') || document.querySelector('rich-textarea p');
-                if (!input) { this.post('ERROR', 'Input not found'); return; }
-                
-                input.focus();
-                input.innerText = prompt;
-                input.dispatchEvent(new InputEvent('input', {bubbles:true, inputType:'insertText'}));
-                
-                setTimeout(() => {
-                    const sendBtn = document.querySelector('button[aria-label*="Send"]') || document.querySelector('button[aria-label*="发送"]');
-                    if (sendBtn) {
-                        sendBtn.click();
-                        this.monitorStream();
+                // 轮询等待输入框出现，最多等 10 秒
+                let attempts = 0;
+                const waitForInput = setInterval(() => {
+                    const input = document.querySelector('div[contenteditable="true"]') || document.querySelector('rich-textarea p');
+                    if (input) {
+                        clearInterval(waitForInput);
+                        // 找到输入框，开始操作
+                        input.focus();
+                        input.innerText = prompt;
+                        input.dispatchEvent(new InputEvent('input', {bubbles:true, inputType:'insertText'}));
+                        
+                        // 同样轮询等待发送按钮
+                        let btnAttempts = 0;
+                        const waitForBtn = setInterval(() => {
+                            const sendBtn = document.querySelector('button[aria-label*="Send"]') || document.querySelector('button[aria-label*="发送"]');
+                            if (sendBtn) {
+                                clearInterval(waitForBtn);
+                                sendBtn.click();
+                                this.monitorStream();
+                            } else {
+                                btnAttempts++;
+                                if (btnAttempts > 50) {
+                                    clearInterval(waitForBtn);
+                                    // Fallback to Enter key
+                                    input.dispatchEvent(new KeyboardEvent('keydown', {bubbles:true, key:'Enter', keyCode:13}));
+                                    this.monitorStream();
+                                }
+                            }
+                        }, 200);
                     } else {
-                        // 尝试回车兜底
-                        input.dispatchEvent(new KeyboardEvent('keydown', {bubbles:true, key:'Enter', code:'Enter', keyCode:13}));
-                        this.monitorStream();
+                        attempts++;
+                        if (attempts > 50) { clearInterval(waitForInput); this.post('ERROR', 'Input timeout'); }
                     }
-                }, 800); // 增加延时确保 UI 响应
+                }, 200);
             },
             monitorStream: function() {
                 this.lastTextLength = 0;
