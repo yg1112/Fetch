@@ -1,2 +1,0 @@
-
-Success! The logic is working.

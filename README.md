@@ -1,180 +1,87 @@
-# Invoke
+# Fetch: The Invisible Bridge 🌉
 
-A macOS utility for real-time Git synchronization with AI pair programming support.
+> **Use Gemini 2.0 Flash (Free Web) as the backend for Aider.** > No API Keys. No Limits. Pure "Telepathy".
 
-## ✨ New: Three-Mode System
+Fetch is a lightweight macOS utility that acts as a **local proxy server**. It tricks [Aider](https://aider.chat/) into thinking it's talking to an OpenAI-compatible API, but actually forwards your code to a hidden **Google Gemini** web session in the background.
 
-Invoke now offers **three Git workflows** to match your needs:
+## 🧠 The Philosophy
 
-- 🔒 **Local Only**: Commit locally without pushing (perfect for privacy/experiments)
-- 🔀 **Safe**: Create PR branches for team review
-- ⚡ **YOLO**: Direct push to main (fast prototyping)
+- **Aider is the Hand**: The world's best AI coding agent (CLI).
+- **Gemini is the Brain**: Google's powerful 2M context window model (Free).
+- **Fetch is the Wire**: An invisible pipe connecting them.
 
-See [Three-Mode System Guide](docs/THREE_MODE_SYSTEM.md) | [中文指南](docs/THREE_MODE_SYSTEM_CN.md)
+We don't try to reimplement Aider's logic in Swift. We just provide the connection.
 
-## Features
+## 🚀 Quick Start
 
-- 🔄 Real-time Git change tracking and auto-commit
-- 🤖 Gemini AI integration for pair programming
-- 🎯 Three flexible Git modes (Local Only / Safe / YOLO)
-- 🎬 Animated onboarding with workflow demo
-- 📁 Project folder selection with full system permissions
-- 🔗 Clickable commit links to GitHub
-- ⚡️ Floating panel UI for quick access
-- 🔐 Proper entitlements and code signing
-- 📋 **Protocol v3** - Direct file editing via clipboard
-- 🔌 **Aider Integration** - Use Fetch as a proxy for Aider
+### 1. Start the Bridge
+Open **Fetch.app**. You will see a small dashboard status window.
+- Ensure the **"Gemini Link"** indicator is 🟢 Green.
+- If it's 🔴 Red, click "Login" to sign in to your Google account in the hidden window.
 
-## Building
+### 2. Connect Aider (Terminal)
+Open your favorite terminal (iTerm2, Terminal.app) in your project folder.
 
-**Important**: Use the provided build script to create a proper .app bundle with all permissions:
+Run the following commands to point Aider to Fetch:
 
 ```bash
-./build_app.sh
+# 1. Point Aider to Fetch's local server
+export OPENAI_API_BASE=http://127.0.0.1:3000/v1
+
+# 2. Set a dummy key (Aider requires this to start)
+export OPENAI_API_KEY=sk-bridge-dummy
+
+# 3. Launch Aider (We force a compatible model name)
+aider --model openai/gemini-2.0-flash --no-auto-commits
+
 ```
 
-This will:
-- Build the release version
-- Create a complete .app bundle structure
-- Copy Info.plist and Entitlements
-- Sign the application with proper permissions
-- Configure runtime paths for frameworks
+### 3. Magic Happens
 
-**Do NOT use `swift build` or `swift run`** - they don't include the necessary permissions and will fail when accessing system features like file pickers.
+Type `hi` in Aider.
 
-## Running
+* **Fetch** receives the request.
+* **Fetch** types it into the hidden Gemini window.
+* **Gemini** generates the response.
+* **Fetch** streams the text back to Aider character-by-character.
 
-### Quick Test (Recommended)
-```bash
-./quick_test.sh
+---
+
+## 🛠️ Architecture
+
+```mermaid
+graph LR
+    A[Terminal (Aider)] -- HTTP POST --> B[Fetch (Local Server :3000)]
+    B -- JS Injection --> C[Hidden WebView (Gemini.com)]
+    C -- MutationObserver --> B
+    B -- SSE Stream --> A
+
 ```
-
-### Manual Launch
-```bash
-# Open normally
-open Invoke.app
-
-# Or run with debug logging
-./Invoke.app/Contents/MacOS/Invoke 2>&1 | tee invoke_debug.log
-```
-
-### Verify Build
-```bash
-./verify_fix.sh
-```
-
-## Development Workflow
-
-1. Make code changes in `Sources/Invoke/`
-2. Build: `./build_app.sh`
-3. Test: `open Invoke.app` or `./quick_test.sh`
-4. Check logs if needed: `cat invoke_debug.log`
-
-## Architecture
-
-See `docs/STRUCTURE.md` for detailed architecture documentation.
 
 ### Key Components
 
-- **GeminiLinkLogic** - Core Git synchronization and AI protocol logic
-- **ContentView** - Main floating panel UI
-- **PermissionsManager** - System permission handling
-- **GitService** - Git operations wrapper
+* **LocalAPIServer (:3000)**: Mimics the OpenAI Chat Completion API. It handles the `stream=true` requests from Aider.
+* **GeminiWebManager**: A headless WebKit instance that loads `gemini.google.com`. It uses JavaScript to inject prompts and scrape responses in real-time.
+* **ChromeBridge**: (Optional) Attempts to steal cookies from your Chrome/Arc browser to achieve "Zero-Click Login".
 
-## Requirements
+## ❓ Troubleshooting
 
-- macOS 14.0+
-- Swift 5.9+
-- Xcode Command Line Tools
+**Q: Aider says "Timeout" or hangs at "Waiting..."**
+A: This usually means the JS injection missed the "Send" button on the web page.
 
-## Troubleshooting
+* Check if the Fetch UI is running.
+* Try running the query again.
 
-### File Picker Issues
-If you see grayed-out folders or crashes when selecting files:
-- ✅ Use `./build_app.sh` to create a proper .app bundle
-- ❌ Don't use `swift run` - it lacks necessary permissions
+**Q: Aider says "Authentication Error"**
+A: You forgot to set the environment variables (`OPENAI_API_BASE`). Aider is trying to connect to the real OpenAI server.
 
-### Framework Not Found
-If you see "Library not loaded: Sparkle.framework":
-- Run `./build_app.sh` again - it fixes the rpath automatically
+**Q: Does this work with other agents?**
+A: Yes! Any tool that supports `OpenAI-compatible` endpoints (like Cursor, Cline, or LangChain) can technically use Fetch as a backend.
 
-### Permission Denied
-- Check System Settings > Privacy & Security
-- Grant "Full Disk Access" if needed for certain folders
+---
 
-## Protocol v3 - Direct File Editing
+## ⚠️ Disclaimer
 
-Fetch supports **Protocol v3** for direct file editing through the clipboard. This allows AI assistants to modify your codebase by copying formatted instructions to the clipboard.
+This is an experimental "hack" that relies on the DOM structure of the Gemini web interface. If Google changes their website class names, this bridge might break until updated.
 
-### Format
-
-The protocol uses special markers to indicate file changes:
-
-```
->>> INVOKE
-!!!FILE_START!!!
-path/to/file.ext
-[Full file content here]
-!!!FILE_END!!!
-```
-
-### How It Works
-
-1. **AI generates code** in the Protocol v3 format
-2. **Copy to clipboard** - The formatted text is copied
-3. **Fetch detects** the `>>> INVOKE` trigger
-4. **Files are written** automatically to your project
-
-### Example
-
-```
->>> INVOKE
-!!!FILE_START!!!
-Sources/Example.swift
-import Foundation
-
-class Example {
-    func hello() {
-        print("Hello, World!")
-    }
-}
-!!!FILE_END!!!
-```
-
-### Usage Tips
-
-- Ensure Fetch is running and has access to your project folder
-- The protocol requires **complete file content** - partial updates are not supported
-- Markdown code blocks (```) should be **outside** the `!!!FILE_START!!!` tags
-- Each file must be complete and valid
-
-## Aider Integration
-
-Fetch can act as a proxy between Aider and Gemini, allowing you to use Gemini's web interface with Aider's code editing capabilities.
-
-### Setup
-
-1. **Start Fetch** and ensure you're logged into Gemini
-2. **Configure Aider** to use Fetch's local API server:
-
-```bash
-export OPENAI_API_BASE=http://127.0.0.1:3000/v1
-export OPENAI_API_KEY=any-key
-aider --model openai/gemini-2.0-flash
-```
-
-3. **Use Aider normally** - Fetch will proxy requests to Gemini
-
-### How It Works
-
-- Fetch runs a local API server on port 3000
-- Aider connects to this server instead of OpenAI
-- Fetch translates Aider's requests to Gemini's web interface
-- Responses are returned in OpenAI-compatible format
-
-### Benefits
-
-- ✅ Use Gemini's free web interface with Aider
-- ✅ No API keys required
-- ✅ Full code editing capabilities
-- ✅ Real-time synchronization with Git
+**Happy Vibe Coding!** 🥂
