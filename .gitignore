@@ -35,3 +35,4 @@ Invoke.app/
 
 # Temporary test files
 test_*.sh
+.aider*

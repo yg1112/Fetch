@@ -101,29 +101,33 @@ class GeminiWebManager: NSObject, ObservableObject, WKScriptMessageHandler, WKNa
             },
             
             startGeneration: function(prompt) {
-                // 增加 fallback，防止 Google 改 class 名
+                // 🔥 ROBUSTNESS: 尝试多种选择器
                 const input = document.querySelector('div[contenteditable="true"]') || 
-                              document.querySelector('rich-textarea p') ||
+                              document.querySelector('rich-textarea > div > p') ||
                               document.querySelector('textarea');
                               
-                if (!input) { this.post('ERROR', 'Input not found'); return; }
+                if (!input) { this.post('ERROR', 'Input field not found'); return; }
                 
                 input.focus();
                 input.innerText = prompt;
-                // 模拟更真实的用户输入事件，触发 React/Angular 的绑定
+                
+                // 🔥 ROBUSTNESS: 模拟真实输入事件，触发 React/Angular 绑定
                 input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText' }));
+                input.dispatchEvent(new Event('change', { bubbles: true }));
                 
                 setTimeout(() => {
+                    // 🔥 ROBUSTNESS: 尝试多种发送按钮
                     const sendBtn = document.querySelector('button[aria-label*="Send"]') || 
                                     document.querySelector('button[aria-label*="发送"]') ||
-                                    document.querySelector('button.send-button'); // 假设的兜底
+                                    document.querySelector('button.send-button'); // 猜测类名
+                                    
                     if (sendBtn) {
                         sendBtn.click();
                         this.monitorStream();
                     } else {
                         this.post('ERROR', 'Send button not found');
                     }
-                }, 600); // 稍微加长一点等待时间
+                }, 800); // 增加延时以确保 DOM 响应
             },
             
             monitorStream: function() {

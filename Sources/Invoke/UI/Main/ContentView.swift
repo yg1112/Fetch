@@ -1,112 +1,86 @@
 import SwiftUI
 
 struct ContentView: View {
-    // 直接观测核心组件，不再需要中间商
     @StateObject private var webManager = GeminiWebManager.shared
     @StateObject private var server = LocalAPIServer.shared
-    @StateObject private var chromeBridge = ChromeBridge.shared
     
-    // 自动滚动日志
-    @State private var logText = ""
-
     var body: some View {
-        VStack(spacing: 0) {
-            // MARK: - Status Header
-            HStack(spacing: 16) {
-                StatusIndicator(
-                    label: "Gemini Link",
-                    isActive: webManager.isReady && webManager.isLoggedIn,
-                    color: .green
-                )
-                
-                StatusIndicator(
-                    label: "API Server (:3000)",
-                    isActive: server.isRunning,
-                    color: .blue
-                )
-                
+        VStack(spacing: 20) {
+            // Header
+            HStack {
+                Text("Fetch Bridge")
+                    .font(.title2).bold()
                 Spacer()
-                
-                // 便捷按钮：复制环境变量，方便用户去终端粘贴
-                Button(action: copyEnvVars) {
-                    HStack {
-                        Image(systemName: "terminal")
-                        Text("Copy Env Vars")
-                    }
-                }
-                .help("Copy export commands for Terminal")
+                StatusBadge(label: "Gemini", isActive: webManager.isReady && webManager.isLoggedIn)
+                StatusBadge(label: "Server :\(server.port)", isActive: server.isRunning)
             }
             .padding()
-            .background(Color(NSColor.windowBackgroundColor))
+            .background(Color(NSColor.controlBackgroundColor))
             
-            Divider()
+            // Instructions
+            VStack(alignment: .leading, spacing: 12) {
+                Text("🚀 How to connect Aider:").font(.headline)
+                
+                CodeBlock(code: "export OPENAI_API_BASE=http://127.0.0.1:\(server.port)/v1")
+                CodeBlock(code: "export OPENAI_API_KEY=sk-bridge")
+                CodeBlock(code: "aider --model openai/gemini-2.0-flash --no-auto-commits")
+            }
+            .padding()
             
-            // MARK: - Server Logs
-            // 这里建议连接到一个 LogStore，或者简单显示状态
-            // 为了极简，我们暂时只显示静态提示，实际日志看 Xcode 控制台即可
-            // 或者你可以做一个简单的 LogView
-            ScrollView {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Invisible Bridge Active").font(.headline).foregroundColor(.secondary)
-                    Text("1. Keep this window open.")
-                    Text("2. Open your favorite Terminal.")
-                    Text("3. Run: export OPENAI_API_BASE=http://127.0.0.1:3000/v1")
-                    Text("4. Run: aider --model openai/gemini-2.0-flash --no-auto-commits")
-                    
-                    if !webManager.isLoggedIn {
-                        Text("⚠️ Gemini Not Logged In").foregroundColor(.red).bold()
-                        Button("Login in WebView") {
-                             // 简单的登录触发
-                             let url = URL(string: "https://gemini.google.com")!
-                             NSWorkspace.shared.open(url)
+            Spacer()
+            
+            // Actions
+            if !webManager.isLoggedIn {
+                HStack {
+                    Text("🔴 Not Logged In").foregroundColor(.red)
+                    Button("Inject Cookies (Chrome)") {
+                        ChromeBridge.shared.fetchCookiesFromChrome { res in
+                            if case .success(let cookies) = res {
+                                webManager.injectRawCookies(cookies) { webManager.loadGemini() }
+                            }
                         }
+                    }
+                    Button("Open Browser") {
+                        webManager.loadGemini() // 会在 WebView 显示
+                        // 这里可以加一个 Window 展示 WebView 的逻辑，或者就让它在后台跑
                     }
                 }
                 .padding()
-                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .background(Color.black.opacity(0.8))
         }
-        .frame(width: 400, height: 250)
+        .frame(width: 500, height: 350)
         .onAppear {
             server.start()
-            
-            // 自动尝试“盗取”Cookie (如果还没登录)
-            if !webManager.isLoggedIn {
-                chromeBridge.fetchCookiesFromChrome { result in
-                    if case .success(let cookies) = result {
-                        webManager.injectRawCookies(cookies) {
-                            print("🍪 Cookies injected successfully via Chrome Bridge!")
-                            webManager.loadGemini() // 刷新页面生效
-                        }
-                    }
-                }
-            }
         }
-    }
-    
-    private func copyEnvVars() {
-        let cmd = "export OPENAI_API_BASE=http://127.0.0.1:3000/v1 && export OPENAI_API_KEY=sk-bridge"
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        pasteboard.setString(cmd, forType: .string)
     }
 }
 
-struct StatusIndicator: View {
+struct StatusBadge: View {
     let label: String
     let isActive: Bool
-    let color: Color
-    
     var body: some View {
-        HStack(spacing: 6) {
-            Circle()
-                .fill(isActive ? color : Color.gray)
-                .frame(width: 8, height: 8)
-                .shadow(color: isActive ? color.opacity(0.5) : .clear, radius: 4)
-            Text(label)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundColor(isActive ? .primary : .secondary)
+        HStack(spacing: 4) {
+            Circle().fill(isActive ? Color.green : Color.red).frame(width: 8, height: 8)
+            Text(label).font(.caption).foregroundColor(.secondary)
         }
+        .padding(6)
+        .background(Capsule().fill(Color.gray.opacity(0.1)))
+    }
+}
+
+struct CodeBlock: View {
+    let code: String
+    var body: some View {
+        HStack {
+            Text(code).font(.system(.caption, design: .monospaced))
+            Spacer()
+            Button(action: { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(code, forType: .string) }) {
+                Image(systemName: "doc.on.doc")
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(8)
+        .background(Color.black.opacity(0.3))
+        .cornerRadius(6)
     }
 }
