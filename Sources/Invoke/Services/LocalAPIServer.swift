@@ -1,6 +1,13 @@
 import Foundation
 import Network
 
+// 定义 Gemini 返回的 JSON 数据结构
+struct GeminiChange: Codable {
+    let filename: String
+    let search_content: String
+    let replace_content: String
+}
+
 class LocalAPIServer: ObservableObject {
     static let shared = LocalAPIServer()
     
@@ -11,7 +18,6 @@ class LocalAPIServer: ObservableObject {
     
     func start() {
         if isRunning && listener != nil { return }
-        // Removed auto-inject logic for better UX
         for tryPort in UInt16(3000)...UInt16(3010) {
             if startListener(on: tryPort) {
                 self.port = tryPort; self.isRunning = true
@@ -57,39 +63,105 @@ class LocalAPIServer: ObservableObject {
     }
     
     private func handleChatCompletion(_ connection: NWConnection, _ body: String) {
+        print("📨 Received Request from Aider...") // Debug log
+        
         guard let data = body.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let messages = json["messages"] as? [[String: Any]] else { return }
+              let messages = json["messages"] as? [[String: Any]] else {
+            print("❌ Failed to parse request body")
+            return
+        }
 
-        // 🔥 FIX 1: 拼接所有上下文 (修复 Context 被覆盖的 Bug)
         let allContent = messages.compactMap { $0["content"] as? String }.joined(separator: "\n\n")
         
-        // 🔥 FIX 2: 系统指令 (防漂移)
-        let systemInstruction = "🔴 [SYSTEM: Ignore previous history. Treat this as a NEW request.]\n\n"
-        let robustPrompt = systemInstruction + allContent
+        // Prompt (同上一次，保持不变)
+        let systemInstruction = """
+        🔴 [SYSTEM ALERT]
+        You are a code modification engine.
+        You must output your response STRICTLY in a valid JSON array format.
+        
+        REQUIRED JSON STRUCTURE:
+        [
+          {
+            "filename": "path/to/file.ext",
+            "search_content": "exact code lines to be replaced (must match original file exactly)",
+            "replace_content": "new code lines to insert"
+          }
+        ]
+        
+        RULES:
+        1. DO NOT use Markdown code fences (```json). Output RAW JSON only.
+        2. DO NOT provide any explanation.
+        3. Ensure `search_content` matches the user's file content EXACTLY.
+        
+        USER REQUEST CONTEXT:
+        """
+        
+        let robustPrompt = systemInstruction + "\n\n" + allContent
 
-        // 1. 抢先发送 Header (Latency Optimization)
         let headers = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n"
         connection.send(content: headers.data(using: .utf8), completion: .contentProcessed{_ in})
 
         Task.detached {
-            // 2. 调用 
+            print("⏳ Asking Gemini (Buffering Mode)...")
+            var fullBuffer = ""
             let stream = await GeminiCore.shared.generate(prompt: robustPrompt)
             
             for await chunk in stream {
-                // 3. 构建 OpenAI 格式的数据包
-                let json = ["choices": [["delta": ["content": chunk]]]]
-                if let data = try? JSONEncoder().encode(json),
-                   let str = String(data: data, encoding: .utf8) {
-                    let sse = "data: \(str)\n\n"
-                    connection.send(content: sse.data(using: .utf8), completion: .contentProcessed{_ in})
-                }
+                fullBuffer += chunk
             }
             
-            // 4. 发送结束信号
+            print("✅ Gemini Response Complete. Length: \(fullBuffer.count)")
+            
+            // 🔥 关键修复：处理空响应 🔥
+            var outputToSend = ""
+            if fullBuffer.isEmpty {
+                print("⚠️ Warning: Empty buffer received from GeminiCore")
+                // 发送一个伪造的错误信息给 Aider，让用户在终端能看到
+                outputToSend = "⚠️ FETCH ERROR: Gemini returned NO content. Please check the 'Show Brain' window in Fetch App to ensure you are logged in."
+            } else {
+                // 正常转换
+                outputToSend = self.convertJsonToAiderBlock(fullBuffer)
+            }
+            
+            let responseJson = ["choices": [["delta": ["content": outputToSend]]]]
+            if let data = try? JSONEncoder().encode(responseJson),
+               let str = String(data: data, encoding: .utf8) {
+                let sse = "data: \(str)\n\n"
+                connection.send(content: sse.data(using: .utf8), completion: .contentProcessed{_ in})
+            }
+            
             connection.send(content: "data: [DONE]\n\n".data(using: .utf8), completion: .contentProcessed { _ in
                 connection.cancel()
             })
+        }
+    }
+    
+    private func convertJsonToAiderBlock(_ rawInput: String) -> String {
+        let cleanInput = rawInput
+            .replacingOccurrences(of: "```json", with: "")
+            .replacingOccurrences(of: "```", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        guard let data = cleanInput.data(using: .utf8) else { return rawInput }
+        
+        do {
+            let changes = try JSONDecoder().decode([GeminiChange].self, from: data)
+            if changes.isEmpty { return "Request processed. No code changes needed." }
+            
+            var output = ""
+            for change in changes {
+                output += "\(change.filename)\n"
+                output += "<<<<<<< SEARCH\n"
+                output += change.search_content + "\n"
+                output += "=======\n"
+                output += change.replace_content + "\n"
+                output += ">>>>>>> Replace\n\n"
+            }
+            return output
+        } catch {
+            print("⚠️ JSON Parse Failed, returning raw text. Input was: \(cleanInput.prefix(50))...")
+            return rawInput
         }
     }
 }

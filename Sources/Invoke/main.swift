@@ -12,9 +12,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // 初始化 
         GeminiCore.shared.prepare()
         
-        // 甚至不需要状态栏图标，除非出错
-        // 或者只在 Menu Bar 显示一个极小的点
-        // ...
+        // 设置菜单栏图标
+        setupStatusBar()
     }
     
     @MainActor
