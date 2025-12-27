@@ -1,107 +1,99 @@
 import SwiftUI
 
 struct ContentView: View {
-    @StateObject private var bridgeService = BridgeService.shared
-    @StateObject private var aiderService = AiderService.shared
-    // 注意：移除了 WebManager 和 LinkLogic，只保留纯净的 UI
+    // 直接观测核心组件，不再需要中间商
+    @StateObject private var webManager = GeminiWebManager.shared
+    @StateObject private var server = LocalAPIServer.shared
     
-    @State private var inputText = ""
-    @State private var projectPath = UserDefaults.standard.string(forKey: "ProjectRoot") ?? ""
-    @State private var isAlwaysOnTop = true
-
-    // 🎨 Colors
-    let neonGreen = Color(red: 0.0, green: 0.9, blue: 0.5)
-    let neonBlue = Color(red: 0.0, green: 0.5, blue: 1.0)
-    let neonOrange = Color(red: 1.0, green: 0.6, blue: 0.0)
-    let dangerRed = Color(red: 1.0, green: 0.3, blue: 0.4)
+    // 自动滚动日志
+    @State private var logText = ""
 
     var body: some View {
-        ZStack {
-            Color(red: 0.05, green: 0.05, blue: 0.07).opacity(0.95).edgesIgnoringSafeArea(.all)
-            VStack(spacing: 0) {
-                // Header
-                HStack(spacing: 12) {
-                    Circle().fill(bridgeService.isLoggedIn ? neonGreen : dangerRed).frame(width: 8, height: 8)
-                    Text(bridgeService.connectionStatus).font(.caption).foregroundColor(.gray)
-                    if !bridgeService.isLoggedIn {
-                        Button("Login") { bridgeService.showLoginWindow() }
-                            .buttonStyle(.borderedProminent).tint(neonOrange)
-                    }
-                    Spacer()
-                    Button("Restart Bridge") { bridgeService.startBridge() }.buttonStyle(.plain)
-                    Button(isAlwaysOnTop ? "Pin 📌" : "Pin") { toggleAlwaysOnTop() }.buttonStyle(.plain)
-                }.padding()
+        VStack(spacing: 0) {
+            // MARK: - Status Header
+            HStack(spacing: 16) {
+                StatusIndicator(
+                    label: "Gemini Link",
+                    isActive: webManager.isReady && webManager.isLoggedIn,
+                    color: .green
+                )
                 
-                // Content
-                if projectPath.isEmpty {
-                    VStack {
-                        Image(systemName: "bird.fill").font(.largeTitle).foregroundColor(neonOrange)
-                        Button("Select Project Folder") { selectProject() }
-                    }.frame(maxHeight: .infinity)
-                } else {
-                    ScrollView {
-                        LazyVStack(alignment: .leading) {
-                            ForEach(aiderService.messages) { msg in
-                                ChatBubble(message: msg, neonBlue: neonBlue)
-                            }
-                        }.padding()
-                    }
-                }
+                StatusIndicator(
+                    label: "API Server (:3000)",
+                    isActive: server.isRunning,
+                    color: .blue
+                )
                 
-                // Input
-                if !projectPath.isEmpty {
+                Spacer()
+                
+                // 便捷按钮：复制环境变量，方便用户去终端粘贴
+                Button(action: copyEnvVars) {
                     HStack {
-                        TextField("Instruct Aider...", text: $inputText)
-                            .textFieldStyle(.roundedBorder)
-                            .onSubmit { sendMessage() }
-                        Button(action: sendMessage) { Image(systemName: "paperplane.fill") }
-                    }.padding()
+                        Image(systemName: "terminal")
+                        Text("Copy Env Vars")
+                    }
                 }
+                .help("Copy export commands for Terminal")
             }
+            .padding()
+            .background(Color(NSColor.windowBackgroundColor))
+            
+            Divider()
+            
+            // MARK: - Server Logs
+            // 这里建议连接到一个 LogStore，或者简单显示状态
+            // 为了极简，我们暂时只显示静态提示，实际日志看 Xcode 控制台即可
+            // 或者你可以做一个简单的 LogView
+            ScrollView {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Invisible Bridge Active").font(.headline).foregroundColor(.secondary)
+                    Text("1. Keep this window open.")
+                    Text("2. Open your favorite Terminal.")
+                    Text("3. Run: export OPENAI_API_BASE=http://127.0.0.1:3000/v1")
+                    Text("4. Run: aider --model openai/gemini-2.0-flash --no-auto-commits")
+                    
+                    if !webManager.isLoggedIn {
+                        Text("⚠️ Gemini Not Logged In").foregroundColor(.red).bold()
+                        Button("Login in WebView") {
+                             // 简单的登录触发
+                             let url = URL(string: "https://gemini.google.com")!
+                             NSWorkspace.shared.open(url)
+                        }
+                    }
+                }
+                .padding()
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .background(Color.black.opacity(0.8))
         }
-        .frame(minWidth: 480, minHeight: 400)
+        .frame(width: 400, height: 250)
         .onAppear {
-            toggleAlwaysOnTop()
-            // 启动 Server (在此处安全启动，或手动启动)
-            LocalAPIServer.shared.start() 
-            bridgeService.startBridge()
-            if !projectPath.isEmpty { aiderService.startAider(projectPath: projectPath) }
+            server.start()
         }
     }
     
-    private func selectProject() {
-        let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = false
-        if panel.runModal() == .OK, let url = panel.url {
-            self.projectPath = url.path
-            UserDefaults.standard.set(url.path, forKey: "ProjectRoot")
-            aiderService.startAider(projectPath: url.path)
-        }
-    }
-    
-    private func sendMessage() {
-        guard !inputText.isEmpty else { return }
-        aiderService.sendUserMessage(inputText)
-        inputText = ""
-    }
-    
-    private func toggleAlwaysOnTop() {
-        if let panel = NSApplication.shared.windows.first {
-            isAlwaysOnTop.toggle()
-            panel.level = isAlwaysOnTop ? .floating : .normal
-        }
+    private func copyEnvVars() {
+        let cmd = "export OPENAI_API_BASE=http://127.0.0.1:3000/v1 && export OPENAI_API_KEY=sk-bridge"
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(cmd, forType: .string)
     }
 }
 
-struct ChatBubble: View {
-    let message: AiderService.ChatMessage
-    let neonBlue: Color
+struct StatusIndicator: View {
+    let label: String
+    let isActive: Bool
+    let color: Color
+    
     var body: some View {
-        HStack {
-            if message.isUser {
-                Spacer(); Text(message.content).padding(8).background(neonBlue).cornerRadius(8)
-            } else {
-                Text(message.content).padding(8).background(Color.white.opacity(0.1)).cornerRadius(8).textSelection(.enabled); Spacer()
-            }
+        HStack(spacing: 6) {
+            Circle()
+                .fill(isActive ? color : Color.gray)
+                .frame(width: 8, height: 8)
+                .shadow(color: isActive ? color.opacity(0.5) : .clear, radius: 4)
+            Text(label)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(isActive ? .primary : .secondary)
         }
     }
 }
