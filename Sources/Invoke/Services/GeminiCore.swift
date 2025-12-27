@@ -29,12 +29,34 @@ class GeminiCore: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
             log: (msg) => window.webkit.messageHandlers.core.postMessage({t:'LOG', d:msg}),
             stream: (txt) => window.webkit.messageHandlers.core.postMessage({t:'TXT', d:txt}),
             
+            // 动作：点击【新对话】按钮
+            reset: () => {
+                // 1. 查找侧边栏的 "New chat" 按钮
+                // 注意：Selector 可能会变，我们要找得聪明点
+                const buttons = Array.from(document.querySelectorAll('span, div, a'));
+                const newChatBtn = buttons.find(el => el.innerText === 'New chat' || el.innerText === 'New conversation');
+                
+                if (newChatBtn) {
+                    newChatBtn.click();
+                    return true;
+                }
+                
+                // 备选：直接访问 URL (会触发页面加载，作为兜底)
+                // window.location.href = 'https://gemini.google.com/app'; 
+                return false;
+            },
+            
             // 核心任务：输入 Prompt 并点击发送
             submit: (p) => {
                 const tryClick = () => {
                     const box = document.querySelector('div[contenteditable="true"]');
                     if(!box) return false;
                     box.focus();
+                    // 清空当前框内残留文本 (虽然 Reset 后应该为空)
+                    document.execCommand('selectAll', false, null);
+                    document.execCommand('delete', false, null);
+                    
+                    // 粘贴新内容
                     document.execCommand('insertText', false, p);
                     
                     // 等待发送按钮变绿
@@ -103,8 +125,24 @@ class GeminiCore: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
                                    .replacingOccurrences(of: "\"", with: "\\\"")
                                    .replacingOccurrences(of: "\n", with: "\\n")
             
+            // 策略：每次都新建对话。保证质量，牺牲一点速度。
+            let script = """
+            (function() {
+                // 查找并点击 "New Chat" (通常是侧边栏第一个主要按钮)
+                // 这里用更底层的 DOM 触发，避免 UI 动画等待
+                const buttons = Array.from(document.querySelectorAll('span, div, a'));
+                const newChatBtn = buttons.find(el => el.innerText === 'New chat' || el.innerText === 'New conversation');
+                if(newChatBtn) newChatBtn.click();
+                
+                // 给 UI 一点反应时间 (SPA 很快，300ms 足够)
+                setTimeout(() => {
+                    window.bridge.submit(`\(safePrompt)`);
+                }, 300);
+            })();
+            """
+            
             // 执行注入
-            webView.evaluateJavaScript("window.bridge.submit(\"\(safePrompt)\")")
+            webView.evaluateJavaScript(script)
         }
     }
     

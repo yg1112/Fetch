@@ -1,18 +1,18 @@
 #!/bin/bash
 
-echo "🚀 Quick Test for Invoke.app"
+echo "🚀 Quick Test for Fetch.app"
 echo "============================="
 echo ""
 
-# Check if Invoke.app exists
-if [ ! -d "Invoke.app" ]; then
-    echo "❌ Invoke.app not found!"
+# Check if Fetch.app exists
+if [ ! -d "Fetch.app" ]; then
+    echo "❌ Fetch.app not found!"
     echo "📦 Building it now..."
     ./build_app.sh
     echo ""
 fi
 
-echo "📱 Testing Invoke.app with full debug logging..."
+echo "📱 Testing Fetch.app with full debug logging..."
 echo ""
 echo "📝 Instructions:"
 echo "1. 应用会打开"
@@ -26,7 +26,7 @@ echo ""
 echo "按 Enter 开始测试..."
 read
 
-./Invoke.app/Contents/MacOS/Invoke 2>&1 | tee invoke_debug.log
+./Fetch.app/Contents/MacOS/Fetch 2>&1 | tee invoke_debug.log
 
 echo ""
 echo "📊 测试完成！"
