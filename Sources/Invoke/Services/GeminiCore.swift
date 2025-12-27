@@ -8,6 +8,13 @@ enum BridgeError: Error {
     case domError(String)
 }
 
+// 状态定义
+enum NeuralState {
+    case idle       // 空闲 (绿点)
+    case thinking   // 思考中 (闪烁/大脑)
+    case error      // 错误/未登录 (红点)
+}
+
 // 使用 @MainActor class 但用锁保证原子性 (模拟 Actor 行为)
 @MainActor
 class GeminiCore: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
@@ -20,7 +27,14 @@ class GeminiCore: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
     private var isProcessing = false
     
     // 状态回调
-    var onStateChange: ((Bool) -> Void)?
+    var onStateChange: ((NeuralState) -> Void)?
+    
+    // 当前状态
+    private var currentState: NeuralState = .error {
+        didSet {
+            onStateChange?(currentState)
+        }
+    }
     
     // MARK: - 初始化
     override init() {
@@ -65,6 +79,7 @@ class GeminiCore: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
                 self.lock.unlock()
                 
                 self.continuation = cont
+                self.currentState = .thinking  // 设置为思考中
                 
                 do {
                     // 2. 检查登录
@@ -92,6 +107,7 @@ class GeminiCore: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
                     self.lock.lock()
                     self.isProcessing = false
                     self.lock.unlock()
+                    self.currentState = .error  // 设置为错误
                 }
             }
         }
@@ -115,6 +131,7 @@ class GeminiCore: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
             lock.lock()
             isProcessing = false
             lock.unlock()
+            currentState = .idle  // 设置为空闲
             print("✅ Generation Complete")
         case "ERR":
             print("🚨 JS Error: \(body["d"] ?? "")")
@@ -122,6 +139,7 @@ class GeminiCore: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
             lock.lock()
             isProcessing = false
             lock.unlock()
+            currentState = .error  // 设置为错误
         default: break
         }
     }
@@ -131,6 +149,19 @@ class GeminiCore: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
     private static let injectionScript = """
     window.bridge = {
         post: (t, d) => window.webkit.messageHandlers.core.postMessage({t:t, d:d}),
+        
+        // 重置上下文
+        resetContext: () => {
+            try {
+                const newChatBtn = document.querySelector('div[data-test-id="new-chat-button"]') || 
+                                   document.querySelector('a[href^="/app"]');
+                if(newChatBtn) {
+                    newChatBtn.click();
+                }
+            } catch(e) {
+                console.error('Reset context failed:', e);
+            }
+        },
         
         // 核心任务流
         processTask: async (prompt) => {
@@ -223,16 +254,21 @@ class GeminiCore: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         showDebugWindow()
     }
     
+    // 重置上下文
+    func reset() {
+        webView.evaluateJavaScript("window.bridge.resetContext()")
+    }
+    
     // MARK: - WKNavigationDelegate
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         let url = webView.url?.absoluteString ?? ""
         if url.contains("gemini.google.com/app") {
             print("Login Success")
-            onStateChange?(true)
+            currentState = .idle  // 设置为空闲
             window?.close()
         } else if url.contains("accounts.google.com") {
             print("Needs Login")
-            onStateChange?(false)
+            currentState = .error  // 设置为错误
         }
     }
 }
